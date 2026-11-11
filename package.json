@@ -1,6 +1,6 @@
 {
-  "name": "countervault-public-verification",
-  "version": "0.1.0",
+  "name": "countervault-mcp",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "express": "4.22.3",
+    "pg": "8.16.3",
     "zod": "4.6.7"
   }
 }

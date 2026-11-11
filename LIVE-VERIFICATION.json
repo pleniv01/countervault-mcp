@@ -1,0 +1,37 @@
+{
+  "checked_at": "2026-11-11T19:35:55.821Z",
+  "url": "https://countervault-mcp-production.up.railway.app/mcp",
+  "synthetic": true,
+  "calls": [
+    {
+      "tool": "verify_public_receipt",
+      "check": "manifest_matches",
+      "expected": true,
+      "passed": true
+    },
+    {
+      "tool": "compare_receipt_fingerprint",
+      "check": "fingerprint_matches",
+      "expected": true,
+      "passed": true
+    },
+    {
+      "tool": "compare_receipt_fingerprint",
+      "check": "fingerprint_matches",
+      "expected": false,
+      "passed": true
+    }
+  ],
+  "tools": [
+    "verify_public_receipt",
+    "compare_receipt_fingerprint",
+    "get_account_status",
+    "list_folders",
+    "get_folder",
+    "create_folder",
+    "save_note",
+    "create_receipt"
+  ],
+  "unsupported_host_rejected": true,
+  "status": "passed"
+}

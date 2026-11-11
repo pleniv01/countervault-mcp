@@ -10,7 +10,7 @@ const report = { checked_at: new Date().toISOString(), url, synthetic: true, cal
 try {
   await client.connect(new StreamableHTTPClientTransport(new URL(url)));
   report.tools = (await client.listTools()).tools.map(tool => tool.name);
-  assert.equal(report.tools.length, 2);
+  assert.ok(report.tools.includes('verify_public_receipt') && report.tools.includes('compare_receipt_fingerprint'));
   for (const [name, args, field, expected] of [
     ['verify_public_receipt', { receipt_url: 'demo' }, 'manifest_matches', true],
     ['compare_receipt_fingerprint', { receipt_url: 'demo', sha256: demoReceipt().records[0].sha256 }, 'fingerprint_matches', true],

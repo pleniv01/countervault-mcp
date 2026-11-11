@@ -1,0 +1,98 @@
+// Uses only two newly created temporary schemas; never reads customer records.
+import assert from 'node:assert/strict';
+import pg from 'pg';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { createOAuthStore, hashToken } from '../server/oauth-store.mjs';
+import { CountervaultOAuth } from '../server/oauth.mjs';
+import { runOnce } from '../server/account-tools.mjs';
+import { createApp } from '../server/index.mjs';
+
+const databaseUrl = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error('Use railway run or supply DATABASE_URL for isolated-schema integration tests.');
+const suffix = randomBytes(6).toString('hex');
+const accountSchema = 'mcp_fixture_' + suffix;
+const schema = 'mcp_oauth_' + suffix;
+const pool = new pg.Pool({ connectionString: databaseUrl, max: 5, ssl: databaseUrl.includes('railway') ? { rejectUnauthorized: false } : undefined });
+let listener;
+try {
+  await pool.query(`CREATE SCHEMA ${accountSchema};
+    CREATE TABLE ${accountSchema}.users(id uuid PRIMARY KEY,status text);
+    CREATE TABLE ${accountSchema}.accounts(id uuid PRIMARY KEY);
+    CREATE TABLE ${accountSchema}.account_memberships(user_id uuid,account_id uuid,status text);
+    CREATE TABLE ${accountSchema}.auth_sessions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,account_id uuid,token_hash text,expires_at timestamptz,last_seen_at timestamptz,revoked_at timestamptz);`);
+  const identity = { user: { id: randomUUID(), display_name: 'Synthetic OAuth reviewer' }, account: { id: randomUUID(), role: 'owner' }, auth_mode: 'passwordless' };
+  await pool.query(`INSERT INTO ${accountSchema}.users VALUES($1,'active');`, [identity.user.id]);
+  await pool.query(`INSERT INTO ${accountSchema}.accounts VALUES($1)`, [identity.account.id]);
+  await pool.query(`INSERT INTO ${accountSchema}.account_memberships VALUES($1,$2,'active')`, [identity.user.id, identity.account.id]);
+  const store = await createOAuthStore({ pool, schema, accountSchema, encryptionKey: randomBytes(32).toString('base64') });
+  const provider = new CountervaultOAuth(store, { requestAccount: async (token, path) => {
+    assert.equal(token, 'fixture_browser_session'); assert.equal(path, '/api/auth/session'); return identity;
+  } });
+  listener = createApp({ provider }).listen(0, '127.0.0.1');
+  await new Promise(resolve => listener.once('listening', resolve));
+  const base = `http://127.0.0.1:${listener.address().port}`;
+  const redirect = 'https://chatgpt.com/connector_platform_oauth_redirect';
+  const registration = await fetch(base + '/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic reviewer', redirect_uris: [redirect], token_endpoint_auth_method: 'none' }) });
+  assert.equal(registration.status, 201);
+  const client = await registration.json();
+  const metadata = await (await fetch(base + '/.well-known/oauth-authorization-server')).json();
+  assert.equal(metadata.authorization_response_iss_parameter_supported, true);
+  assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ['none']);
+  async function begin(scopes = 'countervault:read countervault:write') {
+    const verifier = randomBytes(32).toString('base64url');
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+    const params = new URLSearchParams({ client_id: client.client_id, response_type: 'code', redirect_uri: redirect, code_challenge: challenge, code_challenge_method: 'S256', resource: provider.resource, scope: scopes, state: 'synthetic-state' });
+    const response = await fetch(base + '/authorize?' + params, { redirect: 'manual' });
+    assert.equal(response.status, 302);
+    const id = new URL(response.headers.get('location')).searchParams.get('mcp_request');
+    const consent = await fetch(`${base}/account-link/requests/${id}`, { headers: { Origin: 'https://countervault.co' } });
+    assert.equal(consent.status, 200);
+    const deniedOrigin = await fetch(`${base}/account-link/requests/${id}`, { headers: { Origin: 'https://evil.example' } });
+    assert.equal(deniedOrigin.status, 403);
+    const approval = await fetch(`${base}/account-link/requests/${id}/approve`, { method: 'POST', headers: { Origin: 'https://countervault.co', Authorization: 'Bearer fixture_browser_session', 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(approval.status, 200);
+    const callback = new URL((await approval.json()).redirect_url);
+    assert.equal(callback.searchParams.get('iss'), provider.issuer);
+    assert.equal(callback.searchParams.get('state'), 'synthetic-state');
+    const replayApproval = await fetch(`${base}/account-link/requests/${id}/approve`, { method: 'POST', headers: { Origin: 'https://countervault.co', Authorization: 'Bearer fixture_browser_session', 'Content-Type': 'application/json' }, body: '{}' });
+    assert.notEqual(replayApproval.status, 200);
+    return { verifier, code: callback.searchParams.get('code') };
+  }
+  const exchange = params => fetch(base + '/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: client.client_id, resource: provider.resource, ...params }) });
+  const { verifier, code } = await begin();
+  assert.equal((await exchange({ grant_type: 'authorization_code', code, code_verifier: randomBytes(32).toString('base64url'), redirect_uri: redirect })).status, 400);
+  const response = await exchange({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirect });
+  assert.equal(response.status, 200);
+  const tokens = await response.json();
+  const auth = await provider.verifyAccessToken(tokens.access_token);
+  assert.equal(auth.extra.accountId, identity.account.id);
+  assert.equal(auth.resource.href, provider.resource);
+  const encrypted = (await pool.query(`SELECT encrypted_session FROM ${schema}.grants WHERE id=$1`, [auth.extra.grantId])).rows[0].encrypted_session;
+  const backend = await provider.backendSession(auth);
+  assert.ok(!encrypted.includes(backend));
+  assert.notEqual(tokens.access_token, backend);
+  assert.equal((await exchange({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirect })).status, 400);
+  let writes = 0;
+  const first = await runOnce(provider, auth, 'synthetic_write_1', 'fixture', { title: 'Synthetic' }, async () => ({ id: ++writes }));
+  const repeated = await runOnce(provider, auth, 'synthetic_write_1', 'fixture', { title: 'Synthetic' }, async () => ({ id: ++writes }));
+  assert.equal(first.id, repeated.id); assert.equal(writes, 1);
+  await assert.rejects(runOnce(provider, auth, 'synthetic_write_1', 'fixture', { title: 'Different' }, async () => ({})));
+  const refresh = await exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
+  assert.equal(refresh.status, 200);
+  const rotated = await refresh.json();
+  await provider.verifyAccessToken(rotated.access_token);
+  assert.equal((await exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token })).status, 400);
+  await assert.rejects(provider.verifyAccessToken(rotated.access_token));
+  const readonly = await begin('countervault:read');
+  const readonlyTokens = await (await exchange({ grant_type: 'authorization_code', code: readonly.code, code_verifier: readonly.verifier, redirect_uri: redirect })).json();
+  assert.equal((await exchange({ grant_type: 'refresh_token', refresh_token: readonlyTokens.refresh_token, scope: 'countervault:read countervault:write' })).status, 400);
+  const readonlyAuth = await provider.verifyAccessToken(readonlyTokens.access_token);
+  await pool.query(`UPDATE ${accountSchema}.account_memberships SET status='revoked' WHERE account_id=$1`, [identity.account.id]);
+  await assert.rejects(provider.verifyAccessToken(readonlyTokens.access_token));
+  assert.ok(readonlyAuth.scopes.includes('countervault:read'));
+  console.log('PASS: real PostgreSQL OAuth consent, PKCE, one-use codes, issuer/resource binding, encrypted delegated sessions, scope limits, refresh rotation/replay revocation, membership revocation and write retry deduplication. Synthetic schemas only.');
+} finally {
+  if (listener) await new Promise(resolve => listener.close(resolve));
+  await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; DROP SCHEMA IF EXISTS ${accountSchema} CASCADE;`);
+  await pool.end();
+}

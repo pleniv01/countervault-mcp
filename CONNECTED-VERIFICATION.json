@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-11-11T19:35:53.988Z",
+  "synthetic_account_only": true,
+  "calls": [
+    "get_account_status",
+    "list_folders",
+    "create_folder",
+    "save_note",
+    "save_note",
+    "get_folder",
+    "create_receipt"
+  ],
+  "oauth_pkce": "passed",
+  "note_retry_no_duplicate": "passed",
+  "private_receipt_no_timestamp": "passed",
+  "revocation": "passed",
+  "status": "passed"
+}
