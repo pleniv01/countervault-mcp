@@ -3,10 +3,15 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const origin = 'https://countervault-mcp-production.up.railway.app';
 const reviewer = JSON.parse(await readFile(new URL('../.env.review.local', import.meta.url), 'utf8'));
 const report = { checked_at: new Date().toISOString(), synthetic_account_only: true, calls: [] };
+const inspectorIndex = process.argv.indexOf('--inspector-cli');
+const inspectorPath = inspectorIndex >= 0 ? process.argv[inspectorIndex + 1] : null;
+const execFileAsync = promisify(execFile);
 const client = new Client({ name: 'countervault-connected-release-check', version: '0.2.0' });
 let access;
 let clientId;
@@ -41,11 +46,21 @@ try {
   await client.connect(new StreamableHTTPClientTransport(new URL(origin + '/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + access } } }));
   assert.equal((await client.listTools()).tools.length, 8);
   async function call(name, args = {}) {
-    const result = await client.callTool({ name, arguments: args });
+    let result;
+    if (inspectorPath) {
+      try {
+        const checked = await execFileAsync(process.execPath, [inspectorPath, '--cli', origin + '/mcp', '--method', 'tools/call', '--tool-name', name,
+          '--tool-args-json', JSON.stringify(args), '--header', 'Authorization: Bearer ' + access, '--format', 'json', '--quiet', '--stored-auth-only'], { timeout: 45000, maxBuffer: 3 * 1024 * 1024 });
+        result = JSON.parse(checked.stdout).result;
+      } catch { throw new Error(name + ': Inspector call failed; credentials and subprocess arguments were not printed.'); }
+    } else result = await client.callTool({ name, arguments: args });
     if (result.isError) throw new Error(name + ': ' + result.content.find(c => c.type === 'text')?.text);
     report.calls.push(name);
     return result.structuredContent;
   }
+  await call('verify_public_receipt', { receipt_url: 'demo' });
+  const comparison = await call('compare_receipt_fingerprint', { receipt_url: 'demo', sha256: '2860da7c2b76bd1c1b496c089d4fcf033499bf3c38e3efafc062f316cdc78d5f' });
+  assert.equal(comparison.fingerprint_matches, true);
   const status = await call('get_account_status');
   assert.equal(status.account.id, reviewer.REVIEWER_ACCOUNT_ID);
   assert.equal(status.billing.complimentary, true);
@@ -75,6 +90,7 @@ try {
   assert.equal(revoked.status, 401);
   report.oauth_pkce = 'passed'; report.note_retry_no_duplicate = 'passed'; report.private_receipt_no_timestamp = 'passed'; report.revocation = 'passed';
   report.status = 'passed';
+  if (inspectorPath) report.client = 'Official MCP Inspector CLI';
   console.log('PASS: live OAuth account linking, subscription/complimentary access, folder reading/creation, note saving/retry, private receipt creation and revocation. Fictional reviewer account only; no purchase or customer-data access.');
 } catch (error) { report.status = 'failed'; report.error = error.message; process.exitCode = 1; console.error(error.message); }
 finally {
@@ -82,4 +98,4 @@ finally {
   // Revoke an unfinished test connection too, if token issuance succeeded.
   if (access && clientId) await fetch(origin + '/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: clientId, token: access }) }).catch(() => {});
 }
-await writeFile(new URL('../CONNECTED-VERIFICATION.json', import.meta.url), JSON.stringify(report, null, 2) + '\n');
+await writeFile(new URL(inspectorPath ? '../INSPECTOR-VERIFICATION.json' : '../CONNECTED-VERIFICATION.json', import.meta.url), JSON.stringify(report, null, 2) + '\n');

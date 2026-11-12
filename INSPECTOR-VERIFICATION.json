@@ -1,0 +1,21 @@
+{
+  "checked_at": "2026-11-12T00:20:10.338Z",
+  "synthetic_account_only": true,
+  "calls": [
+    "verify_public_receipt",
+    "compare_receipt_fingerprint",
+    "get_account_status",
+    "list_folders",
+    "create_folder",
+    "save_note",
+    "save_note",
+    "get_folder",
+    "create_receipt"
+  ],
+  "oauth_pkce": "passed",
+  "note_retry_no_duplicate": "passed",
+  "private_receipt_no_timestamp": "passed",
+  "revocation": "passed",
+  "status": "passed",
+  "client": "Official MCP Inspector CLI"
+}
