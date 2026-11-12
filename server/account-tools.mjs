@@ -1,3 +1,4 @@
+import { recordOrigin } from './record-origin.mjs';
 import { z } from 'zod';
 import { hashToken } from './oauth-store.mjs';
 
@@ -71,11 +72,11 @@ export function registerAccountTools(server, provider, auth) {
         next_offset: offset + limit < folders.length ? offset + limit : null };
     });
   register('get_folder', 'Read a Countervault folder',
-    'Read a selected account folder, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Does not download original files or expose participant emails or sharing tokens.',
+    'Read a selected account folder, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Does not download original files or expose participant emails or sharing tokens.',
     { folder_id: uuid, offset: z.number().int().min(0).max(10000).default(0), limit: z.number().int().min(1).max(50).default(20) }, false,
     async ({ folder_id, offset, limit }, call) => {
       const result = await call('/api/folders/' + folder_id);
-      return { folder: cleanFolder(result.folder), records: result.records.slice(offset, offset + limit).map(r => ({ id: r.id,
+      return { folder: cleanFolder(result.folder), records: result.records.slice(offset, offset + limit).map(r => ({ id: r.id, ...recordOrigin(r),
         title: r.metadata?.title || r.original_filename, sha256: r.sha256, byte_size: r.byte_size, source_type: r.source_type,
         claimed_at: r.captured_at, attested_at: r.attested_at, saved_at: r.created_at,
         ...(r.source_type === 'typed_note' ? { note_text: String(r.metadata?.text || '').slice(0, 20000), note_truncated: String(r.metadata?.text || '').length > 20000 } : {}) })),
@@ -90,14 +91,19 @@ export function registerAccountTools(server, provider, auth) {
       return { folder: cleanFolder(result.folder), saved: true, private: true };
     }));
   register('save_note', 'Save a note in Countervault',
-    'Save the user-approved title and note text in a selected folder as a new entry. Do not save an entire chat, inferred claims or a draft the user has not asked to preserve. Requires paid write access and folder upload permission. Claimed event time is optional and user-supplied. Reuse request_id for an identical retry.',
-    { folder_id: uuid, title: z.string().trim().min(1).max(140), text: z.string().trim().min(1).max(20000),
+    'Save user-authored text verbatim in a selected folder, only when the user asks. Declare text_origin explicitly. Host-assistant drafts and analysis are not saved through this tool; they require an agent_interpretation save path, which is not available yet. Do not save an entire chat, inferred claims or a draft the user has not asked to preserve. Requires paid write access and folder upload permission. Claimed event time is optional and user-supplied. Reuse request_id for an identical retry.',
+    { text_origin: z.enum(['user_authored','host_assistant']).describe('Who composed the text: the user or host assistant. User approval of an AI draft does not change its origin.'), folder_id: uuid, title: z.string().trim().min(1).max(140), text: z.string().min(1).max(20000).refine(value=>Boolean(value.trim()),'Write a note before saving.'),
       occurred_at: z.string().datetime({ offset: true }).optional(), request_id: requestId }, true,
-    async ({ folder_id, title, text, occurred_at, request_id }, call) => runOnce(provider, auth, request_id, 'save_note', { folder_id, title, text, occurred_at }, async () => {
-      const result = await call(`/api/folders/${folder_id}/notes`, { method: 'POST', body: { title, text, occurredAt: occurred_at ?? null, requestId: request_id } });
-      return { saved: true, folder_id, record: { id: result.record.id, title: result.record.metadata?.title,
+    async ({ text_origin, folder_id, title, text, occurred_at, request_id }, call) => {
+      if(text_origin==='host_assistant') return {saved:false,tier:'agent_interpretation',agent:{key:'host_assistant',version:'unspecified',operator:'user_connected'},reason:'Saving assistant interpretations is not available yet. Nothing was saved or converted into a user-authored note.',countervault_url:'https://countervault.co'};
+      const saved=await runOnce(provider, auth, request_id, 'save_note', { folder_id, title, text, occurred_at }, async () => {
+      const result = await call(`/api/folders/${folder_id}/notes`, { method: 'POST', body: { title, text, occurredAt: occurred_at ?? null, requestId: request_id, contentOrigin: 'user_authored' } });
+      return { saved: true, folder_id, record: { id: result.record.id, ...recordOrigin(result.record), title: result.record.metadata?.title,
         sha256: result.record.sha256, claimed_at: result.record.captured_at, saved_at: result.record.created_at } };
-    }));
+      });
+      // Cached pre-provenance saves retain their existing operation identity.
+      return {...saved,record:{...saved.record,...recordOrigin({source_type:'typed_note',...saved.record})}};
+    });
   register('create_receipt', 'Generate a Countervault receipt',
     'Generate a dated receipt for existing entries only when the user requests it. Existing folder sharing is preserved. If the folder is public, obtain explicit confirmation before setting public_visibility_confirmed true. Does not request blockchain timestamping, certify truth or notarize. Reuse request_id for an identical retry.',
     { folder_id: uuid, request_id: requestId, public_visibility_confirmed: z.boolean().default(false) }, true,

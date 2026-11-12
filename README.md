@@ -22,3 +22,7 @@ deployment. Public checks use fixed-host GET requests; connected account tools u
 existing Countervault account APIs with a separately minted encrypted session.
 Subscriptions and folder permissions are enforced by those APIs. The integration
 does not change sharing, delete records, collect payment or request timestamps. See [privacy](PRIVACY.md) for data handling and infrastructure limits.
+
+## Phase 0 provenance contract (0.3.0 review)
+
+Account record responses include tier=record and content_origin=user_authored (typed notes) or external (outside records). Labels describe source, not proven identity or truth; receipt hashes/formats are unchanged. save_note now requires text_origin. User-authored text can be saved verbatim; host_assistant text returns saved=false pending the dedicated interpretation-save feature. Do not relabel an approved AI draft as user-authored. No Insights runner, model provider, new scopes or agent grants are enabled. This is a paired API/MCP/package review; production publication is separate.
