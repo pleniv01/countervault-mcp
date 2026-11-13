@@ -7,7 +7,7 @@ import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/st
 
 test('legacy record projections derive origin without accepting contradictory labels',()=>{
   assert.deepEqual(recordOrigin({source_type:'typed_note'}),{tier:'record',content_origin:'user_authored'});
-  assert.deepEqual(recordOrigin({source_type:'drive',tier:'record',content_origin:'external'}),{tier:'record',content_origin:'external'});
+  assert.deepEqual(recordOrigin({source_type:'drive',tier:'record',content_origin:'external',storage_mode:'linked',content_stored:false}),{tier:'record',content_origin:'external'});
   assert.throws(()=>recordOrigin({source_type:'typed_note',content_origin:'external'}),/inconsistent/);
   assert.throws(()=>recordOrigin({source_type:'typed_note',tier:'agent_interpretation'}),/inconsistent/);
   assert.throws(()=>recordOrigin({}),/missing/);
@@ -21,7 +21,7 @@ test('Claude and ChatGPT transports preserve record origin and refuse to save ho
     async backendSession(){return 'synthetic_session';},
     async requestAccount(_session,path,options={}){
       if(options.method==='POST'){writes++;assert.equal(options.body.contentOrigin,'user_authored');return {record:{id:recordId,source_type:'typed_note',metadata:{title:'Statement'},sha256:'a'.repeat(64)}};}
-      return {folder:{id:folderId,title:'Synthetic'},records:[{id:recordId,source_type:'typed_note',tier:'record',content_origin:'user_authored',metadata:{text:'My statement'}},{id:'external',source_type:'drive',tier:'record',content_origin:'external'}],receipts:[]};
+      return {folder:{id:folderId,title:'Synthetic'},records:[{id:recordId,source_type:'typed_note',tier:'record',content_origin:'user_authored',storage_mode:'stored',content_stored:true,metadata:{text:'My statement'}},{id:'external',source_type:'drive',tier:'record',content_origin:'external',storage_mode:'linked',content_stored:false}],receipts:[]};
     }};
   const listener=createApp({provider}).listen(0,'127.0.0.1');await new Promise(r=>listener.once('listening',r));
   try{for(const host of ['claude','chatgpt']){
@@ -30,6 +30,7 @@ test('Claude and ChatGPT transports preserve record origin and refuse to save ho
       await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:'+listener.address().port+'/mcp'),{requestInit:{headers:{Authorization:'Bearer '+host+'_fixture'}}}));
       const read=await client.callTool({name:'get_folder',arguments:{folder_id:folderId}});
       assert.deepEqual(read.structuredContent.records.map(r=>[r.tier,r.content_origin]),[['record','user_authored'],['record','external']]);
+      assert.deepEqual(read.structuredContent.records.map(r=>[r.storage_mode,r.content_stored]),[['stored',true],['linked',false]]);
       const args={folder_id:folderId,title:'Statement',text:'My statement',request_id:host+'_request_001'};
       const saved=await client.callTool({name:'save_note',arguments:{...args,text_origin:'user_authored'}});
       assert.equal(saved.structuredContent.saved,true);assert.equal(saved.structuredContent.record.content_origin,'user_authored');

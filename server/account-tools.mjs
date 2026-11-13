@@ -5,6 +5,7 @@ import { hashToken } from './oauth-store.mjs';
 const uuid = z.string().uuid();
 const requestId = z.string().regex(/^[A-Za-z0-9_-]{8,100}$/).describe('Unique operation ID. Reuse the same ID for an identical retry; never mint a new ID merely because a response timed out.');
 const versionFields=r=>({version_id:r.id,item_id:r.version_root_id||r.item_id||r.id,version_no:r.version_no||1,supersedes_record_id:r.supersedes_record_id||null,...(typeof r.is_current==='boolean'?{is_current:r.is_current}:{})});
+const storageFields=r=>({...(['stored','linked'].includes(r.storage_mode)?{storage_mode:r.storage_mode}:{}),...(typeof r.content_stored==='boolean'?{content_stored:r.content_stored}:{})});
 const cleanReceipt = r => ({ id: r.id, receipt_number: r.receipt_number, manifest_hash: r.manifest_hash, status: r.status,
   access_policy: r.access_policy, generated_at: r.generated_at, anchor_status: r.anchor_status });
 const cleanFolder = f => ({ id: f.id, title: f.title, context: f.context, permission_level: f.permission_level,
@@ -55,8 +56,8 @@ export function registerAccountTools(server, provider, auth) {
   register('get_account_status', 'Check your Countervault account',
     'Check the connected account, current subscription and write access. Returns an external subscription/manage-billing link; does not create checkout sessions, charge or change billing.', {}, false,
     async (_input, call) => {
-      const [identity, billing] = await Promise.all([call('/api/auth/session'), call('/api/billing')]);
-      return { user: { display_name: identity.user.display_name }, account: identity.account,
+      const [identity, billing, usage] = await Promise.all([call('/api/auth/session'), call('/api/billing'), call('/api/account/storage')]);
+      return { user: { display_name: identity.user.display_name }, account: identity.account, storage: usage.storage,
         billing: { available: billing.available, write_access: billing.writeAccess, complimentary: billing.complimentary,
           subscription_status: billing.subscription?.subscription_status || 'none', paid_through: billing.subscription?.paid_through || null,
           monthly_price_cents: billing.monthlyPriceCents, currency: billing.currency, tax_added_separately: !billing.taxesIncluded,
@@ -73,12 +74,12 @@ export function registerAccountTools(server, provider, auth) {
         next_offset: offset + limit < folders.length ? offset + limit : null };
     });
   register('get_folder', 'Read a Countervault folder',
-    'Read current versions in a selected account folder; use get_record_history for superseded versions, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Does not download original files or expose participant emails or sharing tokens.',
+    'Read current versions in a selected account folder; use get_record_history for superseded versions, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Preserve storage_mode and content_stored when returned; a fingerprint does not imply a saved copy. Uploads and downloads happen in the Countervault website. Does not download original files or expose participant emails or sharing tokens.',
     { folder_id: uuid, offset: z.number().int().min(0).max(10000).default(0), limit: z.number().int().min(1).max(50).default(20) }, false,
     async ({ folder_id, offset, limit }, call) => {
       const result = await call('/api/folders/' + folder_id);
       const records=result.records.filter(record=>record.is_current!==false);
-      return { folder: cleanFolder(result.folder), records: records.slice(offset, offset + limit).map(r => ({ id: r.id, ...recordOrigin(r), ...versionFields(r),
+      return { folder: cleanFolder(result.folder), records: records.slice(offset, offset + limit).map(r => ({ id: r.id, ...recordOrigin(r), ...versionFields(r), ...storageFields(r),
         title: r.metadata?.title || r.original_filename, sha256: r.sha256, byte_size: r.byte_size, source_type: r.source_type,
         claimed_at: r.captured_at, attested_at: r.attested_at, saved_at: r.created_at,
         ...(r.source_type === 'typed_note' ? { note_text: String(r.metadata?.text || '').slice(0, 20000), note_truncated: String(r.metadata?.text || '').length > 20000 } : {}) })),
@@ -89,7 +90,7 @@ export function registerAccountTools(server, provider, auth) {
     'Read saved versions of a selected entry under the same folder permissions. Earlier notes and receipts are preserved. Preserve source labels; a correction does not establish truth. Returns private note text, truncated explicitly when necessary; does not download original files.',
     {folder_id:uuid,record_id:uuid,before_version:z.number().int().min(1).max(2147483647).optional()},false,async({folder_id,record_id,before_version},call)=>{
       const result=await call(`/api/folders/${folder_id}/records/${record_id}/history${before_version?'/'+before_version:''}`);
-      return {item_id:result.item_id,current_version_id:result.current_version_id,total_versions:result.total_versions,next_before_version:result.next_before_version,versions:result.versions.map(r=>({id:r.id,...recordOrigin(r),...versionFields(r),title:r.metadata?.title||r.original_filename,sha256:r.sha256,source_type:r.source_type,reason:r.reason,saved_at:r.created_at,can_correct:r.can_correct,
+      return {item_id:result.item_id,current_version_id:result.current_version_id,total_versions:result.total_versions,next_before_version:result.next_before_version,versions:result.versions.map(r=>({id:r.id,...recordOrigin(r),...versionFields(r), ...storageFields(r),title:r.metadata?.title||r.original_filename,sha256:r.sha256,source_type:r.source_type,reason:r.reason,saved_at:r.created_at,can_correct:r.can_correct,
         ...(r.source_type==='typed_note'?{note_text:String(r.metadata?.text||'').slice(0,20000),note_truncated:Boolean(r.note_truncated)||String(r.metadata?.text||'').length>20000}:{})}))};
     });
   register('create_folder', 'Create a private Countervault folder',
@@ -111,7 +112,7 @@ export function registerAccountTools(server, provider, auth) {
       const saved=await runOnce(provider, auth, request_id, correction_of_record_id?'correct_note':'save_note', payload, async () => {
       const path=correction_of_record_id?`/api/folders/${folder_id}/records/${correction_of_record_id}/corrections`:`/api/folders/${folder_id}/notes`;
       const result = await call(path, { method: 'POST', body: { title, text, occurredAt: occurred_at ?? null, requestId: request_id, contentOrigin: 'user_authored',...(correction_of_record_id?{reason:correction_reason}:{}) } });
-      return { saved: true, folder_id, record: { id: result.record.id, ...recordOrigin(result.record), ...versionFields(result.record), title: result.record.metadata?.title,
+      return { saved: true, folder_id, record: { id: result.record.id, ...recordOrigin(result.record), ...versionFields(result.record), ...storageFields(result.record), title: result.record.metadata?.title,
         sha256: result.record.sha256, claimed_at: result.record.captured_at, saved_at: result.record.created_at } };
       });
       // Cached pre-provenance saves retain their existing operation identity.

@@ -12,7 +12,7 @@ const instructions = `Countervault helps connected subscribers keep notes and da
 const reference = z.string().max(256).describe('User-provided public https://countervault.co/verify/verify_<hex> receipt URL, or "demo" for an explicitly synthetic reviewer example. Never an account, invitation or private file URL.');
 
 export function createServer({ provider, auth } = {}) {
-  const server = new McpServer({ name: 'countervault', version: provider ? '0.4.0' : '0.1.0' }, { instructions });
+  const server = new McpServer({ name: 'countervault', version: provider ? '0.5.0' : '0.1.0' }, { instructions });
   const register = (name, title, description, inputSchema, run) => server.registerTool(name, {
     title, description, inputSchema,
     annotations: { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -40,7 +40,7 @@ export function createApp({ provider } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('X-Content-Type-Options', 'nosniff'); next(); });
-  app.get('/health', (_req, res) => res.json({ ok: true, service: 'countervault', version: provider ? '0.4.0' : '0.1.0', account_connections: !!provider }));
+  app.get('/health', (_req, res) => res.json({ ok: true, service: 'countervault', version: provider ? '0.5.0' : '0.1.0', account_connections: !!provider }));
   app.get('/.well-known/openai-apps-challenge', (_req, res) => {
     const challenge = process.env.OPENAI_DOMAIN_CHALLENGE;
     if (!challenge) return res.status(404).send('No domain challenge configured.');
