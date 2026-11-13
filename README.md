@@ -5,7 +5,7 @@ plugin is maintained separately at https://github.com/pleniv01/countervault-clau
 The ChatGPT candidate is in the owner's `codex-business-plugins` collection.
 
 Run `npm ci`, `npm test`, then `npm start` (port 3000 or `PORT`). The service
-provides eight tools over stateless Streamable HTTP at `/mcp`, public documentation, privacy,
+provides public verification and account tools over stateless Streamable HTTP at `/mcp`, public documentation, privacy,
 health and a clearly labeled synthetic demo. Public checks require no account. The account layer uses PostgreSQL and an
 OAuth encryption key, with consented read/write scopes and existing API permissions. `OPENAI_DOMAIN_CHALLENGE` is an optional
 portal-issued domain verification value, not an account credential.
