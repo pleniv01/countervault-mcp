@@ -30,3 +30,7 @@ Account record responses include tier=record and content_origin=user_authored (t
 ## Immutable versions (0.4.0 review)
 
 get_folder shows current versions. get_record_history reads earlier versions through existing read access. For an explicitly requested user-authored note correction, save_note accepts correction_of_record_id plus correction_reason and creates a new version. Earlier text and receipt hashes remain unchanged; competing stale corrections are rejected. Existing write access, subscription, author/owner rules and allowance apply on the API. Assistant interpretation saves remain unavailable. No deployment is implied by this source update.
+
+### Phase 0 attachment storage
+
+Version 0.5.0 exposes live record `storage_mode` and actual `content_stored` availability, plus the shared allowance through `get_account_status`. Preserve missing fields on older results as unknown. A linked fingerprint is not a saved copy, and saved-copy availability does not establish historical custody or truth. Users attach, download and export files in Countervault's own UI; MCP adds no file-upload/download tool and never copies linked Drive/email content. Both Claude and ChatGPT use this shared server. This review branch requires the paired Phase 0 API changes and is not a production deployment.
