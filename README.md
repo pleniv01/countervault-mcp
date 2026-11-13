@@ -26,3 +26,7 @@ does not change sharing, delete records, collect payment or request timestamps. 
 ## Phase 0 provenance contract (0.3.0 review)
 
 Account record responses include tier=record and content_origin=user_authored (typed notes) or external (outside records). Labels describe source, not proven identity or truth; receipt hashes/formats are unchanged. save_note now requires text_origin. User-authored text can be saved verbatim; host_assistant text returns saved=false pending the dedicated interpretation-save feature. Do not relabel an approved AI draft as user-authored. No Insights runner, model provider, new scopes or agent grants are enabled. This is a paired API/MCP/package review; production publication is separate.
+
+## Immutable versions (0.4.0 review)
+
+get_folder shows current versions. get_record_history reads earlier versions through existing read access. For an explicitly requested user-authored note correction, save_note accepts correction_of_record_id plus correction_reason and creates a new version. Earlier text and receipt hashes remain unchanged; competing stale corrections are rejected. Existing write access, subscription, author/owner rules and allowance apply on the API. Assistant interpretation saves remain unavailable. No deployment is implied by this source update.

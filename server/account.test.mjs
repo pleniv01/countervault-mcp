@@ -45,7 +45,7 @@ test('Private MCP tools require account consent and write scope, even when publi
   const reader = new Client({ name: 'reader-test', version: '1' });
   try {
     await anonymous.connect(new StreamableHTTPClientTransport(url));
-    assert.equal((await anonymous.listTools()).tools.length, 8);
+    assert.equal((await anonymous.listTools()).tools.length, 9);
     const challenge = await anonymous.callTool({ name: 'list_folders', arguments: {} });
     assert.equal(challenge.isError, true);
     assert.ok(challenge._meta['mcp/www_authenticate'][0].includes('countervault:read'));
