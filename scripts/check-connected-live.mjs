@@ -12,7 +12,7 @@ const report = { checked_at: new Date().toISOString(), synthetic_account_only: t
 const inspectorIndex = process.argv.indexOf('--inspector-cli');
 const inspectorPath = inspectorIndex >= 0 ? process.argv[inspectorIndex + 1] : null;
 const execFileAsync = promisify(execFile);
-const client = new Client({ name: 'countervault-connected-release-check', version: '0.2.0' });
+const client = new Client({ name: 'countervault-connected-release-check', version: '0.5.0' });
 let access;
 let clientId;
 async function jsonResponse(response) {
@@ -44,7 +44,7 @@ try {
     body: new URLSearchParams({ grant_type: 'authorization_code', client_id: clientId, code: callback.searchParams.get('code'), redirect_uri: registration.redirect_uris[0], code_verifier: verifier, resource: origin + '/mcp' }) }));
   access = tokens.access_token;
   await client.connect(new StreamableHTTPClientTransport(new URL(origin + '/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + access } } }));
-  assert.equal((await client.listTools()).tools.length, 8);
+  assert.equal((await client.listTools()).tools.length, 9);
   async function call(name, args = {}) {
     let result;
     if (inspectorPath) {
@@ -63,6 +63,7 @@ try {
   assert.equal(comparison.fingerprint_matches, true);
   const status = await call('get_account_status');
   assert.equal(status.account.id, reviewer.REVIEWER_ACCOUNT_ID);
+  assert.ok(Number.isFinite(status.storage.used_bytes));
   assert.equal(status.billing.complimentary, true);
   assert.equal(status.billing.write_access, true);
   assert.ok(status.subscription_url.startsWith('https://countervault.co/'));
@@ -71,7 +72,7 @@ try {
   const created = await call('create_folder', { title: 'Synthetic reviewer example', context: 'Fictional integration verification. No customer records.', request_id: prefix + '_folder' });
   assert.equal(created.private, true);
   const folderId = created.folder.id;
-  const noteArgs = { folder_id: folderId, title: 'Fictional delivery', text: 'The fictional parcel arrived at noon. This is synthetic directory-review data.', request_id: prefix + '_note' };
+  const noteArgs = { text_origin:'user_authored', folder_id: folderId, title: 'Fictional delivery', text: 'The fictional parcel arrived at noon. This is synthetic directory-review data.', request_id: prefix + '_note' };
   const saved = await call('save_note', noteArgs);
   assert.equal(saved.saved, true);
   const repeated = await call('save_note', noteArgs);
