@@ -74,7 +74,7 @@ export function registerAccountTools(server, provider, auth) {
         next_offset: offset + limit < folders.length ? offset + limit : null };
     });
   register('get_folder', 'Read a Countervault folder',
-    'Read current versions in a selected account folder; use get_record_history for superseded versions, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Preserve storage_mode and content_stored when returned; a fingerprint does not imply a saved copy. Uploads and downloads happen in the Countervault website. Does not download original files or expose participant emails or sharing tokens.',
+    'Read current versions in a selected account folder; use get_record_history for superseded versions, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Preserve storage_mode and content_stored when returned; a fingerprint does not imply a saved copy. Uploads, explicit file-version replacement and downloads happen in the Countervault website; do not copy or upload linked content through an assistant. Does not download original files or expose participant emails or sharing tokens.',
     { folder_id: uuid, offset: z.number().int().min(0).max(10000).default(0), limit: z.number().int().min(1).max(50).default(20) }, false,
     async ({ folder_id, offset, limit }, call) => {
       const result = await call('/api/folders/' + folder_id);
