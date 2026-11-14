@@ -34,3 +34,7 @@ get_folder shows current versions. get_record_history reads earlier versions thr
 ### Phase 0 attachment storage
 
 Version 0.5.0 exposes live record `storage_mode` and actual `content_stored` availability, plus the shared allowance through `get_account_status`. Preserve missing fields on older results as unknown. A linked fingerprint is not a saved copy, and saved-copy availability does not establish historical custody or truth. Users attach, download and export files in Countervault's own UI; MCP adds no file-upload/download tool and never copies linked Drive/email content. Both Claude and ChatGPT use this shared server. This review branch requires the paired Phase 0 API changes and is not a production deployment.
+
+### Explicit file versions (0.5.1 review)
+
+The paired website adds reviewed local-file replacements under an explicitly selected current version. Existing get_folder/get_record_history contracts expose the current version and preserved history, source labels and actual saved-copy availability. No raw upload or replacement tool is added. Users select, review and confirm bytes in Countervault; old versions and receipts remain unchanged. This source branch is separate from the deployed storage 0.5.0 release.
