@@ -1,0 +1,2 @@
+export const CONNECTION_NOTICE_VERSION='mcp-access-2026-11-14';
+export const CONNECTION_NOTICE='Restricted items and their versions are excluded from private assistant access. This connection cannot upload or download original files, change sharing, delete records, change billing or request blockchain timestamps. Existing public receipt metadata and copies already returned in a conversation are not recalled.';

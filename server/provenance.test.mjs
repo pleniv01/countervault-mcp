@@ -20,6 +20,7 @@ test('Claude and ChatGPT transports preserve record origin and refuse to save ho
     async verifyAccessToken(token){if(!['claude_fixture','chatgpt_fixture'].includes(token))throw Error('invalid');return {token,scopes:['countervault:read','countervault:write'],clientId:token,resource:new URL(this.resource),extra:{grantId:token}};},
     async backendSession(){return 'synthetic_session';},
     async requestAccount(_session,path,options={}){
+      if(path.endsWith('/access'))return {allowed:true};
       if(options.method==='POST'){writes++;assert.equal(options.body.contentOrigin,'user_authored');return {record:{id:recordId,source_type:'typed_note',metadata:{title:'Statement'},sha256:'a'.repeat(64)}};}
       return {folder:{id:folderId,title:'Synthetic'},records:[{id:recordId,source_type:'typed_note',tier:'record',content_origin:'user_authored',storage_mode:'stored',content_stored:true,metadata:{text:'My statement'}},{id:'external',source_type:'drive',tier:'record',content_origin:'external',storage_mode:'linked',content_stored:false}],receipts:[]};
     }};

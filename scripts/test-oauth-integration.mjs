@@ -1,6 +1,10 @@
 // Uses only two newly created temporary schemas; never reads customer records.
 import assert from 'node:assert/strict';
 import pg from 'pg';
+import {readFile,readdir} from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
+import {resolve} from 'node:path';
+import {CONNECTION_NOTICE_VERSION} from '../server/connection-notice.mjs';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { createOAuthStore, hashToken } from '../server/oauth-store.mjs';
 import { CountervaultOAuth } from '../server/oauth.mjs';
@@ -12,18 +16,21 @@ if (!databaseUrl) throw new Error('Use railway run or supply DATABASE_URL for is
 const suffix = randomBytes(6).toString('hex');
 const accountSchema = 'mcp_fixture_' + suffix;
 const schema = 'mcp_oauth_' + suffix;
-const pool = new pg.Pool({ connectionString: databaseUrl, max: 5, ssl: databaseUrl.includes('railway') ? { rejectUnauthorized: false } : undefined });
+const pool = new pg.Pool({ connectionString: databaseUrl, max: 5, options: `-c search_path=${accountSchema},public`, ssl: databaseUrl.includes('railway') ? { rejectUnauthorized: false } : undefined });
 let listener;
 try {
-  await pool.query(`CREATE SCHEMA ${accountSchema};
-    CREATE TABLE ${accountSchema}.users(id uuid PRIMARY KEY,status text);
-    CREATE TABLE ${accountSchema}.accounts(id uuid PRIMARY KEY);
-    CREATE TABLE ${accountSchema}.account_memberships(user_id uuid,account_id uuid,status text);
-    CREATE TABLE ${accountSchema}.auth_sessions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,account_id uuid,token_hash text,expires_at timestamptz,last_seen_at timestamptz,revoked_at timestamptz);`);
-  const identity = { user: { id: randomUUID(), display_name: 'Synthetic OAuth reviewer' }, account: { id: randomUUID(), role: 'owner' }, auth_mode: 'passwordless' };
-  await pool.query(`INSERT INTO ${accountSchema}.users VALUES($1,'active');`, [identity.user.id]);
-  await pool.query(`INSERT INTO ${accountSchema}.accounts VALUES($1)`, [identity.account.id]);
-  await pool.query(`INSERT INTO ${accountSchema}.account_memberships VALUES($1,$2,'active')`, [identity.user.id, identity.account.id]);
+  const apiDir=process.env.COUNTERVAULT_API_DIR;
+  if(!apiDir)throw new Error('Provide COUNTERVAULT_API_DIR pointing to the paired API with compiled principal bindings.');
+  await pool.query(`CREATE SCHEMA ${accountSchema}`);
+  const migrations=resolve(apiDir,'migrations');
+  for(const name of (await readdir(migrations)).filter(name=>name.endsWith('.sql')).sort()){
+    await pool.query((await readFile(resolve(migrations,name),'utf8')).replaceAll('notary_v2',accountSchema).replace(/CREATE EXTENSION IF NOT EXISTS pgcrypto;/g,''));
+  }
+  const {resolveSessionActor}=await import(pathToFileURL(resolve(apiDir,'dist/session-principals.js')));
+  const identity = { user: { id: randomUUID(), display_name: 'Synthetic OAuth reviewer' }, account: { id: randomUUID(), role: 'owner' }, auth_mode: 'passwordless',principal:{kind:'person'} };
+  await pool.query(`INSERT INTO ${accountSchema}.users(id,email) VALUES($1,$2)`,[identity.user.id,randomUUID()+'@example.invalid']);
+  await pool.query(`INSERT INTO ${accountSchema}.accounts(id,name) VALUES($1,'Synthetic OAuth fixture')`,[identity.account.id]);
+  await pool.query(`INSERT INTO ${accountSchema}.account_memberships(user_id,account_id,role) VALUES($1,$2,'owner')`,[identity.user.id,identity.account.id]);
   const store = await createOAuthStore({ pool, schema, accountSchema, encryptionKey: randomBytes(32).toString('base64') });
   const provider = new CountervaultOAuth(store, { requestAccount: async (token, path) => {
     assert.equal(token, 'fixture_browser_session'); assert.equal(path, '/api/auth/session'); return identity;
@@ -49,12 +56,12 @@ try {
     assert.equal(consent.status, 200);
     const deniedOrigin = await fetch(`${base}/account-link/requests/${id}`, { headers: { Origin: 'https://evil.example' } });
     assert.equal(deniedOrigin.status, 403);
-    const approval = await fetch(`${base}/account-link/requests/${id}/approve`, { method: 'POST', headers: { Origin: 'https://countervault.co', Authorization: 'Bearer fixture_browser_session', 'Content-Type': 'application/json' }, body: '{}' });
+    const approval = await fetch(`${base}/account-link/requests/${id}/approve`, { method: 'POST', headers: { Origin: 'https://countervault.co', Authorization: 'Bearer fixture_browser_session', 'Content-Type': 'application/json' }, body: JSON.stringify({notice_version:CONNECTION_NOTICE_VERSION,accepted:true}) });
     assert.equal(approval.status, 200);
     const callback = new URL((await approval.json()).redirect_url);
     assert.equal(callback.searchParams.get('iss'), provider.issuer);
     assert.equal(callback.searchParams.get('state'), 'synthetic-state');
-    const replayApproval = await fetch(`${base}/account-link/requests/${id}/approve`, { method: 'POST', headers: { Origin: 'https://countervault.co', Authorization: 'Bearer fixture_browser_session', 'Content-Type': 'application/json' }, body: '{}' });
+    const replayApproval = await fetch(`${base}/account-link/requests/${id}/approve`, { method: 'POST', headers: { Origin: 'https://countervault.co', Authorization: 'Bearer fixture_browser_session', 'Content-Type': 'application/json' }, body: JSON.stringify({notice_version:CONNECTION_NOTICE_VERSION,accepted:true}) });
     assert.notEqual(replayApproval.status, 200);
     return { verifier, code: callback.searchParams.get('code') };
   }
@@ -69,6 +76,22 @@ try {
   assert.equal(auth.resource.href, provider.resource);
   const encrypted = (await pool.query(`SELECT encrypted_session FROM ${schema}.grants WHERE id=$1`, [auth.extra.grantId])).rows[0].encrypted_session;
   const backend = await provider.backendSession(auth);
+  const principal=(await pool.query(`SELECT * FROM ${accountSchema}.auth_sessions WHERE token_hash=$1`,[hashToken(backend)])).rows[0];
+  const actor=await resolveSessionActor(principal,pool);
+  assert.equal(actor.kind,'assistant');assert.equal(actor.id,auth.extra.grantId);
+  assert.equal(principal.actor_surface,'chatgpt');assert.equal(actor.grant.excludeRestricted,true);
+  assert.ok(actor.grant.actions.includes('write_user_note'));assert.ok(!actor.grant.actions.includes('delete'));
+  await assert.rejects(pool.query(`UPDATE ${accountSchema}.auth_sessions SET actor_kind='person',principal_id=NULL,authorization_grant_id=NULL,actor_surface='web' WHERE id=$1`,[principal.id]),e=>e.code==='42501');
+  await assert.rejects(pool.query(`UPDATE ${accountSchema}.auth_sessions SET expires_at=expires_at+interval '1 day' WHERE id=$1`,[principal.id]),e=>e.code==='42501');
+  await assert.rejects(pool.query(`INSERT INTO ${accountSchema}.auth_sessions(user_id,account_id,token_hash,expires_at,actor_kind,actor_surface,principal_id,authorization_grant_id) VALUES($1,$2,$3,now()+interval '1 day','assistant','claude',$4,$5)`,[identity.user.id,identity.account.id,hashToken(randomUUID()),randomUUID(),actor.grant.id]),e=>e.code==='23514');
+  const human=(await pool.query(`INSERT INTO ${accountSchema}.auth_sessions(user_id,account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 day') RETURNING *`,[identity.user.id,identity.account.id,hashToken(randomUUID())])).rows[0];
+  assert.equal((await resolveSessionActor(human,pool)).kind,'person');
+  const legacyId=randomUUID();
+  await pool.query(`INSERT INTO ${schema}.grants(id,client_id,user_id,account_id,backend_session_id,encrypted_session,scopes,resource,expires_at) VALUES($1,$2,$3,$4,$5,'synthetic',ARRAY['countervault:read'],$6,now()+interval '1 day')`,[legacyId,client.client_id,identity.user.id,identity.account.id,human.id,provider.resource]);
+  await assert.rejects(resolveSessionActor(human,pool),e=>e.assistantSession===true&&e.statusCode===401);
+  await pool.query(`UPDATE ${schema}.grants SET revoked_at=now() WHERE id=$1`,[legacyId]);
+  await assert.rejects(resolveSessionActor(human,pool),e=>e.assistantSession===true);
+
   assert.ok(!encrypted.includes(backend));
   assert.notEqual(tokens.access_token, backend);
   assert.equal((await exchange({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirect })).status, 400);
@@ -83,6 +106,9 @@ try {
   await provider.verifyAccessToken(rotated.access_token);
   assert.equal((await exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token })).status, 400);
   await assert.rejects(provider.verifyAccessToken(rotated.access_token));
+  await assert.rejects(resolveSessionActor(principal,pool),e=>e.assistantSession===true);
+  assert.equal((await pool.query(`SELECT enabled FROM ${accountSchema}.authorization_grants WHERE id=$1`,[actor.grant.id])).rows[0].enabled,false);
+  assert.ok((await pool.query(`SELECT revoked_at FROM ${accountSchema}.auth_sessions WHERE id=$1`,[principal.id])).rows[0].revoked_at);
   const readonly = await begin('countervault:read');
   const readonlyTokens = await (await exchange({ grant_type: 'authorization_code', code: readonly.code, code_verifier: readonly.verifier, redirect_uri: redirect })).json();
   assert.equal((await exchange({ grant_type: 'refresh_token', refresh_token: readonlyTokens.refresh_token, scope: 'countervault:read countervault:write' })).status, 400);
@@ -90,7 +116,7 @@ try {
   await pool.query(`UPDATE ${accountSchema}.account_memberships SET status='revoked' WHERE account_id=$1`, [identity.account.id]);
   await assert.rejects(provider.verifyAccessToken(readonlyTokens.access_token));
   assert.ok(readonlyAuth.scopes.includes('countervault:read'));
-  console.log('PASS: real PostgreSQL OAuth consent, PKCE, one-use codes, issuer/resource binding, encrypted delegated sessions, scope limits, refresh rotation/replay revocation, membership revocation and write retry deduplication. Synthetic schemas only.');
+  console.log('PASS: real PostgreSQL OAuth consent, PKCE, one-use codes, issuer/resource binding, encrypted delegated sessions, scope limits, refresh rotation/replay revocation, membership revocation and write retry deduplication. Immutable principal bindings, legacy reconnect, canonical grant/session revocation. Synthetic schemas only.');
 } finally {
   if (listener) await new Promise(resolve => listener.close(resolve));
   await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; DROP SCHEMA IF EXISTS ${accountSchema} CASCADE;`);
