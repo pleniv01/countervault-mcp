@@ -1,3 +1,4 @@
+import {CONNECTION_NOTICE_VERSION,CONNECTION_NOTICE} from './connection-notice.mjs';
 import express from 'express';
 import { createOAuthMetadata, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { InvalidClientMetadataError, InvalidGrantError, InvalidRequestError, InvalidScopeError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
@@ -68,6 +69,11 @@ export class CountervaultOAuth {
     // A replay revokes the whole connection. Commit that revocation before
     // returning an OAuth error, rather than rolling it back with the exchange.
     const result = await this.store.transaction(async db => {
+      // Match disconnect/cleanup lock order: canonical grant before protocol rows.
+      const binding=(await db.query(`SELECT grant_id FROM ${this.store.schema}.tokens WHERE token_hash=$1 AND kind='refresh' AND client_id=$2`,[hashToken(refresh),client.client_id])).rows[0];
+      if(!binding)return {invalid:true};
+      const canonical=(await db.query(`SELECT enabled,revoked_at,expires_at FROM ${this.store.accountSchema}.authorization_grants WHERE id=$1 FOR UPDATE`,[binding.grant_id])).rows[0];
+      if(!canonical||!canonical.enabled||canonical.revoked_at||canonical.expires_at&&new Date(canonical.expires_at)<=new Date())return {invalid:true};
       const row = (await db.query(`SELECT t.*,g.expires_at AS grant_expires_at,g.revoked_at AS grant_revoked FROM ${this.store.schema}.tokens t JOIN ${this.store.schema}.grants g ON g.id=t.grant_id WHERE token_hash=$1 AND kind='refresh' FOR UPDATE OF t,g`, [hashToken(refresh)])).rows[0];
       if (!row || row.client_id !== client.client_id) return { invalid: true };
       if (row.used_at) { await this.store.revoke(row.grant_id, db); return { replay: true }; }
@@ -135,7 +141,7 @@ export function installOAuth(app, provider) {
     const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization || '')?.[1];
     if (!token) throw Object.assign(new Error('Sign in to Countervault first.'), { status: 401 });
     const info = await provider.requestAccount(token, '/api/auth/session');
-    if (!info.user?.id || !info.account?.id || info.auth_mode !== 'passwordless') throw Object.assign(new Error('A signed-in Countervault account is required.'), { status: 401 });
+    if (!info.user?.id || !info.account?.id || info.auth_mode !== 'passwordless' || info.principal?.kind!=='person') throw Object.assign(new Error('A signed-in Countervault account is required.'), { status: 401 });
     return info;
   };
   const reviewAttempts = new Map();
@@ -155,10 +161,11 @@ export function installOAuth(app, provider) {
   route('get', '/requests/:id', async (req, res) => {
     const row = await provider.store.pending(String(req.params.id));
     if (!row) return res.status(404).json({ error: 'This connection request expired. Start again from your assistant.' });
-    res.json({ client_name: row.client.client_name, redirect_origin: new URL(row.params.redirectUri).origin, scopes: row.params.scopes, expires_at: row.expires_at });
+    res.json({ notice_version:CONNECTION_NOTICE_VERSION,notice:CONNECTION_NOTICE,client_name: row.client.client_name, redirect_origin: new URL(row.params.redirectUri).origin, scopes: row.params.scopes, expires_at: row.expires_at });
   });
   route('post', '/requests/:id/approve', async (req, res) => {
     const user = await identity(req);
+    if(req.body?.notice_version!==CONNECTION_NOTICE_VERSION||req.body?.accepted!==true)return res.status(400).json({error:'Refresh Countervault and review the current connection permissions before approving.'});
     const { code, params } = await provider.store.approve(String(req.params.id), user);
     const redirect = new URL(params.redirectUri);
     redirect.searchParams.set('code', code); redirect.searchParams.set('iss', provider.issuer);
@@ -176,14 +183,14 @@ export function installOAuth(app, provider) {
   });
   route('get', '/connections', async (req, res) => {
     const user = await identity(req);
-    const rows = (await provider.store.q(`SELECT g.id,c.metadata->>'client_name' AS client_name,g.scopes,g.created_at,g.expires_at FROM ${provider.store.schema}.grants g JOIN ${provider.store.schema}.clients c USING(client_id) WHERE g.user_id=$1 AND g.account_id=$2 AND g.revoked_at IS NULL AND g.expires_at>now() ORDER BY g.created_at DESC`, [user.user.id, user.account.id])).rows;
+    const rows = (await provider.store.q(`SELECT g.id,c.metadata->>'client_name' AS client_name,g.scopes,g.created_at,g.expires_at,(s.actor_kind<>'assistant' OR ag.id IS NULL OR NOT ag.enabled) AS requires_reconnect FROM ${provider.store.schema}.grants g JOIN ${provider.store.accountSchema}.auth_sessions s ON s.id=g.backend_session_id LEFT JOIN ${provider.store.accountSchema}.authorization_grants ag ON ag.id=s.authorization_grant_id JOIN ${provider.store.schema}.clients c USING(client_id) WHERE g.user_id=$1 AND g.account_id=$2 AND g.revoked_at IS NULL AND g.expires_at>now() ORDER BY g.created_at DESC`, [user.user.id, user.account.id])).rows;
     res.json({ connections: rows });
   });
   route('post', '/connections/:id/revoke', async (req, res) => {
     const user = await identity(req);
     if (!/^[a-f0-9-]{36}$/.test(String(req.params.id))) return res.status(400).json({ error: 'Invalid connection.' });
     await provider.store.transaction(async db => {
-      const row = (await db.query(`SELECT id FROM ${provider.store.schema}.grants WHERE id=$1 AND user_id=$2 AND account_id=$3 FOR UPDATE`, [String(req.params.id), user.user.id, user.account.id])).rows[0];
+      const row = (await db.query(`SELECT id FROM ${provider.store.schema}.grants WHERE id=$1 AND user_id=$2 AND account_id=$3`, [String(req.params.id), user.user.id, user.account.id])).rows[0];
       if (row) await provider.store.revoke(row.id, db);
     });
     res.json({ revoked: true });

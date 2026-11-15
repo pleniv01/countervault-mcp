@@ -1,3 +1,4 @@
+import {CONNECTION_NOTICE_VERSION} from './connection-notice.mjs';
 import pg from 'pg';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 
@@ -47,12 +48,20 @@ export async function createOAuthStore({ connectionString = process.env.DATABASE
     CREATE TABLE IF NOT EXISTS ${schema}.operations(grant_id uuid NOT NULL REFERENCES ${schema}.grants(id) ON DELETE CASCADE,
       request_id text NOT NULL, operation text NOT NULL, payload_hash text NOT NULL, result jsonb, status text NOT NULL DEFAULT 'started',
       created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(grant_id,request_id));`);
+  await pool.query(`SELECT actor_kind,principal_id,authorization_grant_id FROM ${accountSchema}.auth_sessions LIMIT 0`);
   const q = (text, values = []) => pool.query(text, values);
   async function transaction(run) {
     const db = await pool.connect();
     try { await db.query('BEGIN'); const result = await run(db); await db.query('COMMIT'); return result; }
     catch (error) { await db.query('ROLLBACK'); throw error; }
     finally { db.release(); }
+  }
+  async function revoke(grantId,db){
+    if(!db)return transaction(client=>revoke(grantId,client));
+    await db.query(`UPDATE ${accountSchema}.authorization_grants SET enabled=false WHERE id=$1 AND grantee_type='assistant'`,[grantId]);
+    await db.query(`UPDATE ${schema}.grants SET revoked_at=COALESCE(revoked_at,now()),encrypted_session='' WHERE id=$1`,[grantId]);
+    await db.query(`UPDATE ${accountSchema}.auth_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE id=(SELECT backend_session_id FROM ${schema}.grants WHERE id=$1)`,[grantId]);
+    await db.query(`UPDATE ${schema}.tokens SET revoked_at=COALESCE(revoked_at,now()) WHERE grant_id=$1`,[grantId]);
   }
   return {
     pool, box, schema, accountSchema, q, transaction,
@@ -69,29 +78,33 @@ export async function createOAuthStore({ connectionString = process.env.DATABASE
       return { session_token: token, display_name: member.display_name, synthetic_account: true };
     },
     async newRequest(clientId, params) { const id = randomToken('request'); await q(`INSERT INTO ${schema}.requests VALUES($1,$2,$3,$4)`, [id, clientId, params, new Date(Date.now() + REQUEST_TTL)]); return id; },
-    async revoke(grantId, db = pool) {
-      await db.query(`UPDATE ${schema}.grants SET revoked_at=now(),encrypted_session='' WHERE id=$1`, [grantId]);
-      await db.query(`UPDATE ${accountSchema}.auth_sessions SET revoked_at=now() WHERE id=(SELECT backend_session_id FROM ${schema}.grants WHERE id=$1)`, [grantId]);
-      await db.query(`UPDATE ${schema}.tokens SET revoked_at=now() WHERE grant_id=$1`, [grantId]);
-    },
+    revoke,
     async cleanup() {
       await transaction(async db => {
         await db.query(`DELETE FROM ${schema}.requests WHERE expires_at<now()`);
         await db.query(`DELETE FROM ${schema}.codes WHERE expires_at<now()`);
         await db.query(`DELETE FROM ${schema}.tokens WHERE expires_at<now()`);
-        await db.query(`DELETE FROM ${accountSchema}.auth_sessions WHERE id IN
-          (SELECT backend_session_id FROM ${schema}.grants WHERE expires_at<now() OR revoked_at<now()-interval '1 day')`);
+        const expired=(await db.query(`SELECT id,backend_session_id FROM ${schema}.grants WHERE expires_at<now() OR revoked_at<now()-interval '1 day' ORDER BY id`)).rows;
+        for(const row of expired){await revoke(row.id,db);await db.query(`DELETE FROM ${accountSchema}.auth_sessions WHERE id=$1`,[row.backend_session_id]);}
       });
     },
     async approve(requestId, identity) {
       return transaction(async db => {
         const request = (await db.query(`DELETE FROM ${schema}.requests WHERE id=$1 AND expires_at>now() RETURNING *`, [requestId])).rows[0];
         if (!request) throw new Error('This connection request expired or was already used. Start again from your assistant.');
-        const session = randomToken('session');
-        const expires = new Date(Date.now() + GRANT_TTL);
-        const backend = (await db.query(`INSERT INTO ${accountSchema}.auth_sessions(user_id,account_id,token_hash,expires_at,last_seen_at) VALUES($1,$2,$3,$4,now()) RETURNING id`,
-          [identity.user.id, identity.account.id, hashToken(session), expires])).rows[0];
-        const id = randomUUID();
+        if(identity.principal?.kind!=='person'||identity.auth_mode!=='passwordless')throw new Error('Approve this connection while signed in directly to Countervault.');
+        const id=randomUUID(),session=randomToken('session'),expires=new Date(Date.now()+GRANT_TTL);
+        const scopes=request.params.scopes;
+        if(!Array.isArray(scopes)||!scopes.includes('countervault:read')||scopes.some(scope=>!['countervault:read','countervault:write'].includes(scope)))throw new Error('Invalid connection scopes.');
+        const actions=['read_account','read',...(scopes.includes('countervault:write')?['create_folder','write_user_note','correct_user_note','create_receipt']:[])];
+        const host=new URL(request.params.redirectUri).hostname;
+        const surface=['chatgpt.com','platform.openai.com'].includes(host)?'chatgpt':['claude.ai','console.anthropic.com'].includes(host)?'claude':'api';
+        const consent=(await db.query(`INSERT INTO ${accountSchema}.consent_events(account_id,user_id,kind,doc_version,subject_id,accepted,surface)
+          VALUES($1,$2,'connect_agent',$3,$4,true,'web') RETURNING id`,[identity.account.id,identity.user.id,CONNECTION_NOTICE_VERSION,id])).rows[0];
+        await db.query(`INSERT INTO ${accountSchema}.authorization_grants(id,account_id,owner_user_id,grantee_type,grantee_id,all_projects,tiers,actions,exclude_restricted,consent_event_id,enabled,expires_at)
+          VALUES($1,$2,$3,'assistant',$1,true,ARRAY['record','agent_interpretation'],$4,true,$5,true,$6)`,[id,identity.account.id,identity.user.id,actions,consent.id,expires]);
+        const backend=(await db.query(`INSERT INTO ${accountSchema}.auth_sessions(user_id,account_id,token_hash,expires_at,last_seen_at,actor_kind,actor_surface,principal_id,authorization_grant_id)
+          VALUES($1,$2,$3,$4,now(),'assistant',$5,$6,$6) RETURNING id`,[identity.user.id,identity.account.id,hashToken(session),expires,surface,id])).rows[0];
         await db.query(`INSERT INTO ${schema}.grants(id,client_id,user_id,account_id,backend_session_id,encrypted_session,scopes,resource,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
           [id, request.client_id, identity.user.id, identity.account.id, backend.id, box.encrypt(session), request.params.scopes, request.params.resource, expires]);
         const code = randomToken('code');
@@ -109,7 +122,9 @@ export async function createOAuthStore({ connectionString = process.env.DATABASE
     },
     async resolveAccess(token) {
       return (await q(`SELECT t.*,g.user_id,g.account_id,g.encrypted_session,g.expires_at AS grant_expires_at FROM ${schema}.tokens t JOIN ${schema}.grants g ON g.id=t.grant_id
-        JOIN ${accountSchema}.auth_sessions s ON s.id=g.backend_session_id JOIN ${accountSchema}.users u ON u.id=g.user_id
+        JOIN ${accountSchema}.auth_sessions s ON s.id=g.backend_session_id AND s.actor_kind='assistant' AND s.principal_id=g.id
+        JOIN ${accountSchema}.authorization_grants ag ON ag.id=s.authorization_grant_id AND ag.grantee_id=g.id AND ag.account_id=g.account_id AND ag.owner_user_id=g.user_id AND ag.enabled AND ag.revoked_at IS NULL AND (ag.expires_at IS NULL OR ag.expires_at>now())
+        JOIN LATERAL(SELECT id,accepted FROM ${accountSchema}.consent_events ce WHERE ce.account_id=g.account_id AND ce.user_id=g.user_id AND ce.kind='connect_agent' AND ce.subject_id=g.id ORDER BY ce.event_sequence DESC LIMIT 1) ce ON ce.id=ag.consent_event_id AND ce.accepted JOIN ${accountSchema}.users u ON u.id=g.user_id
         JOIN ${accountSchema}.account_memberships m ON m.account_id=g.account_id AND m.user_id=g.user_id AND m.status='active'
         WHERE t.token_hash=$1 AND t.kind='access' AND t.revoked_at IS NULL AND t.expires_at>now() AND g.revoked_at IS NULL AND g.expires_at>now()
           AND s.revoked_at IS NULL AND s.expires_at>now() AND u.status='active'`, [hashToken(token)])).rows[0];
