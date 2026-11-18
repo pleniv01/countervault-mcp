@@ -38,3 +38,7 @@ Version 0.5.0 exposes live record `storage_mode` and actual `content_stored` ava
 ### Explicit file versions (0.5.1 review)
 
 The paired website adds reviewed local-file replacements under an explicitly selected current version. Existing get_folder/get_record_history contracts expose the current version and preserved history, source labels and actual saved-copy availability. No raw upload or replacement tool is added. Users select, review and confirm bytes in Countervault; old versions and receipts remain unchanged. This source branch is separate from the deployed storage 0.5.0 release.
+
+### Transactional broker audit review
+
+The audit integration requires the paired Countervault API schema through migration 0030. Browser approval/denial/revocation rechecks the presented person session in the write transaction; protocol token processing and cleanup use fixed server attribution. Audit failure rolls back the associated mutation. No tokens, scopes, redirects or client metadata are copied into audit headers. This is a coordinated review change, not an independently deployable update. Public tools and connection notice remain 0.6.0; Countervault's MCP apps do not run model providers. Unbound registration/request metadata and operation-cache outcomes still need separate coverage.
