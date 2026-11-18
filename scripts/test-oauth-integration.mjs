@@ -1,3 +1,4 @@
+import {runBrokerAuditChecks} from './broker-audit-integration.mjs';
 // Uses only two newly created temporary schemas; never reads customer records.
 import assert from 'node:assert/strict';
 import pg from 'pg';
@@ -26,11 +27,13 @@ try {
   for(const name of (await readdir(migrations)).filter(name=>name.endsWith('.sql')).sort()){
     await pool.query((await readFile(resolve(migrations,name),'utf8')).replaceAll('notary_v2',accountSchema).replace(/CREATE EXTENSION IF NOT EXISTS pgcrypto;/g,''));
   }
+  const {verifyStoredAuditChain}=await import(pathToFileURL(resolve(apiDir,'dist/audit-ledger.js')));
   const {resolveSessionActor}=await import(pathToFileURL(resolve(apiDir,'dist/session-principals.js')));
   const identity = { user: { id: randomUUID(), display_name: 'Synthetic OAuth reviewer' }, account: { id: randomUUID(), role: 'owner' }, auth_mode: 'passwordless',principal:{kind:'person'} };
   await pool.query(`INSERT INTO ${accountSchema}.users(id,email) VALUES($1,$2)`,[identity.user.id,randomUUID()+'@example.invalid']);
   await pool.query(`INSERT INTO ${accountSchema}.accounts(id,name) VALUES($1,'Synthetic OAuth fixture')`,[identity.account.id]);
   await pool.query(`INSERT INTO ${accountSchema}.account_memberships(user_id,account_id,role) VALUES($1,$2,'owner')`,[identity.user.id,identity.account.id]);
+  await pool.query(`INSERT INTO ${accountSchema}.auth_sessions(user_id,account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 day')`,[identity.user.id,identity.account.id,hashToken('fixture_browser_session')]);
   const store = await createOAuthStore({ pool, schema, accountSchema, encryptionKey: randomBytes(32).toString('base64') });
   const provider = new CountervaultOAuth(store, { requestAccount: async (token, path) => {
     assert.equal(token, 'fixture_browser_session'); assert.equal(path, '/api/auth/session'); return identity;
@@ -113,6 +116,7 @@ try {
   const readonlyTokens = await (await exchange({ grant_type: 'authorization_code', code: readonly.code, code_verifier: readonly.verifier, redirect_uri: redirect })).json();
   assert.equal((await exchange({ grant_type: 'refresh_token', refresh_token: readonlyTokens.refresh_token, scope: 'countervault:read countervault:write' })).status, 400);
   const readonlyAuth = await provider.verifyAccessToken(readonlyTokens.access_token);
+  await runBrokerAuditChecks({pool,store,provider,identity,client,apiDir,verifyStoredAuditChain});
   await pool.query(`UPDATE ${accountSchema}.account_memberships SET status='revoked' WHERE account_id=$1`, [identity.account.id]);
   await assert.rejects(provider.verifyAccessToken(readonlyTokens.access_token));
   assert.ok(readonlyAuth.scopes.includes('countervault:read'));

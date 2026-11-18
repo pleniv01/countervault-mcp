@@ -3,6 +3,7 @@ import express from 'express';
 import { createOAuthMetadata, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { InvalidClientMetadataError, InvalidGrantError, InvalidRequestError, InvalidScopeError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import {bindBrowserIdentity} from './broker-audit.mjs';
 import { hashToken } from './oauth-store.mjs';
 import { accountRequest } from './account-api.mjs';
 
@@ -58,6 +59,9 @@ export class CountervaultOAuth {
   async exchangeAuthorizationCode(client, code, _verifier, redirectUri, resource) {
     this.validateResource(resource);
     return this.store.transaction(async db => {
+      const binding=(await db.query(`SELECT grant_id FROM ${this.store.schema}.codes WHERE code_hash=$1 AND client_id=$2`,[hashToken(code),client.client_id])).rows[0];
+      if(!binding)throw new InvalidGrantError('Authorization code expired or invalid.');
+      await this.store.lockGrantAccount(db,binding.grant_id);
       const row = (await db.query(`SELECT c.*,g.scopes,g.expires_at AS grant_expires_at,g.revoked_at FROM ${this.store.schema}.codes c JOIN ${this.store.schema}.grants g ON g.id=c.grant_id WHERE c.code_hash=$1 FOR UPDATE OF c`, [hashToken(code)])).rows[0];
       if (!row || row.client_id !== client.client_id || row.used_at || new Date(row.expires_at) <= new Date() || row.redirect_uri !== redirectUri || row.resource !== this.resource || row.revoked_at || new Date(row.grant_expires_at) <= new Date()) throw new InvalidGrantError('Authorization code does not match this client, redirect, resource or lifetime.');
       await db.query(`UPDATE ${this.store.schema}.codes SET used_at=now() WHERE code_hash=$1`, [hashToken(code)]);
@@ -72,11 +76,12 @@ export class CountervaultOAuth {
       // Match disconnect/cleanup lock order: canonical grant before protocol rows.
       const binding=(await db.query(`SELECT grant_id FROM ${this.store.schema}.tokens WHERE token_hash=$1 AND kind='refresh' AND client_id=$2`,[hashToken(refresh),client.client_id])).rows[0];
       if(!binding)return {invalid:true};
+      await this.store.lockGrantAccount(db,binding.grant_id);
       const canonical=(await db.query(`SELECT enabled,revoked_at,expires_at FROM ${this.store.accountSchema}.authorization_grants WHERE id=$1 FOR UPDATE`,[binding.grant_id])).rows[0];
       if(!canonical||!canonical.enabled||canonical.revoked_at||canonical.expires_at&&new Date(canonical.expires_at)<=new Date())return {invalid:true};
       const row = (await db.query(`SELECT t.*,g.expires_at AS grant_expires_at,g.revoked_at AS grant_revoked FROM ${this.store.schema}.tokens t JOIN ${this.store.schema}.grants g ON g.id=t.grant_id WHERE token_hash=$1 AND kind='refresh' FOR UPDATE OF t,g`, [hashToken(refresh)])).rows[0];
       if (!row || row.client_id !== client.client_id) return { invalid: true };
-      if (row.used_at) { await this.store.revoke(row.grant_id, db); return { replay: true }; }
+      if (row.used_at) { await this.store.revoke(row.grant_id,db,{kind:'replay'}); return { replay: true }; }
       if (row.revoked_at || row.grant_revoked || new Date(row.expires_at) <= new Date() || new Date(row.grant_expires_at) <= new Date() || row.resource !== this.resource) return { invalid: true };
       const scopes = requestedScopes ? this.validateScopes(requestedScopes) : row.scopes;
       if (scopes.some(s => !row.scopes.includes(s))) return { invalid: true };
@@ -100,7 +105,7 @@ export class CountervaultOAuth {
   async revokeToken(client, { token }) {
     await this.store.transaction(async db => {
       const row = (await db.query(`SELECT grant_id FROM ${this.store.schema}.tokens WHERE token_hash=$1 AND client_id=$2`, [hashToken(token), client.client_id])).rows[0];
-      if (row) await this.store.revoke(row.grant_id, db);
+      if (row) await this.store.revoke(row.grant_id,db,{kind:'protocol'});
     });
   }
 }
@@ -142,7 +147,7 @@ export function installOAuth(app, provider) {
     if (!token) throw Object.assign(new Error('Sign in to Countervault first.'), { status: 401 });
     const info = await provider.requestAccount(token, '/api/auth/session');
     if (!info.user?.id || !info.account?.id || info.auth_mode !== 'passwordless' || info.principal?.kind!=='person') throw Object.assign(new Error('A signed-in Countervault account is required.'), { status: 401 });
-    return info;
+    return bindBrowserIdentity(info,token);
   };
   const reviewAttempts = new Map();
   route('post', '/reviewer-session', async (req, res) => {
@@ -173,8 +178,7 @@ export function installOAuth(app, provider) {
     res.json({ redirect_url: redirect.href });
   });
   route('post', '/requests/:id/deny', async (req, res) => {
-    await identity(req);
-    const row = (await provider.store.q(`DELETE FROM ${provider.store.schema}.requests WHERE id=$1 RETURNING params`, [String(req.params.id)])).rows[0];
+    const row = await provider.store.deny(String(req.params.id),await identity(req));
     if (!row) return res.status(404).json({ error: 'Connection request expired.' });
     const redirect = new URL(row.params.redirectUri);
     redirect.searchParams.set('error', 'access_denied'); redirect.searchParams.set('iss', provider.issuer);
@@ -189,10 +193,7 @@ export function installOAuth(app, provider) {
   route('post', '/connections/:id/revoke', async (req, res) => {
     const user = await identity(req);
     if (!/^[a-f0-9-]{36}$/.test(String(req.params.id))) return res.status(400).json({ error: 'Invalid connection.' });
-    await provider.store.transaction(async db => {
-      const row = (await db.query(`SELECT id FROM ${provider.store.schema}.grants WHERE id=$1 AND user_id=$2 AND account_id=$3`, [String(req.params.id), user.user.id, user.account.id])).rows[0];
-      if (row) await provider.store.revoke(row.id, db);
-    });
+    await provider.store.revoke(String(req.params.id),undefined,{kind:'browser',identity:user});
     res.json({ revoked: true });
   });
   app.use('/account-link', ui);
