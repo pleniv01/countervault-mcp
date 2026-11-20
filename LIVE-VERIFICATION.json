@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-11T19:35:55.821Z",
+  "checked_at": "2026-11-20T17:43:30.477Z",
   "url": "https://countervault-mcp-production.up.railway.app/mcp",
   "synthetic": true,
   "calls": [
@@ -28,6 +28,7 @@
     "get_account_status",
     "list_folders",
     "get_folder",
+    "get_record_history",
     "create_folder",
     "save_note",
     "create_receipt"
