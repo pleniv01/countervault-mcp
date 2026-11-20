@@ -22,7 +22,7 @@ test('Claude and ChatGPT transports preserve record origin and refuse to save ho
     async requestAccount(_session,path,options={}){
       if(path.endsWith('/access'))return {allowed:true};
       if(options.method==='POST'){writes++;assert.equal(options.body.contentOrigin,'user_authored');return {record:{id:recordId,source_type:'typed_note',metadata:{title:'Statement'},sha256:'a'.repeat(64)}};}
-      return {folder:{id:folderId,title:'Synthetic'},records:[{id:recordId,source_type:'typed_note',tier:'record',content_origin:'user_authored',storage_mode:'stored',content_stored:true,metadata:{text:'My statement'}},{id:'external',source_type:'drive',tier:'record',content_origin:'external',storage_mode:'linked',content_stored:false}],receipts:[]};
+      return {folder:{id:folderId,title:'Synthetic'},records:[{id:recordId,source_type:'typed_note',tier:'record',content_origin:'user_authored',storage_mode:'stored',content_stored:true,metadata:{text:'My statement'}},{id:'external',metadata:{fingerprintRepresentation:'application/pdf',sourceMimeType:'application/vnd.google-apps.document'},source_type:'drive',tier:'record',content_origin:'external',storage_mode:'linked',content_stored:false}],receipts:[]};
     }};
   const listener=createApp({provider}).listen(0,'127.0.0.1');await new Promise(r=>listener.once('listening',r));
   try{for(const host of ['claude','chatgpt']){
@@ -32,6 +32,7 @@ test('Claude and ChatGPT transports preserve record origin and refuse to save ho
       const read=await client.callTool({name:'get_folder',arguments:{folder_id:folderId}});
       assert.deepEqual(read.structuredContent.records.map(r=>[r.tier,r.content_origin]),[['record','user_authored'],['record','external']]);
       assert.deepEqual(read.structuredContent.records.map(r=>[r.storage_mode,r.content_stored]),[['stored',true],['linked',false]]);
+      assert.equal(read.structuredContent.records[1].fingerprint_representation,'application/pdf');assert.equal(read.structuredContent.records[1].source_mime_type,'application/vnd.google-apps.document');
       const args={folder_id:folderId,title:'Statement',text:'My statement',request_id:host+'_request_001'};
       const saved=await client.callTool({name:'save_note',arguments:{...args,text_origin:'user_authored'}});
       assert.equal(saved.structuredContent.saved,true);assert.equal(saved.structuredContent.record.content_origin,'user_authored');

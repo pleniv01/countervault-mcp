@@ -7,6 +7,7 @@ const uuid = z.string().uuid();
 const requestId = z.string().regex(/^[A-Za-z0-9_-]{8,100}$/).describe('Unique operation ID. Reuse the same ID for an identical retry; never mint a new ID merely because a response timed out.');
 const versionFields=r=>({version_id:r.id,item_id:r.version_root_id||r.item_id||r.id,version_no:r.version_no||1,supersedes_record_id:r.supersedes_record_id||null,...(typeof r.is_current==='boolean'?{is_current:r.is_current}:{})});
 const storageFields=r=>({...(['stored','linked'].includes(r.storage_mode)?{storage_mode:r.storage_mode}:{}),...(typeof r.content_stored==='boolean'?{content_stored:r.content_stored}:{})});
+const fingerprintFields=r=>r.source_type==='drive'&&r.metadata?.fingerprintRepresentation==='application/pdf'&&['document','spreadsheet','presentation'].some(kind=>r.metadata?.sourceMimeType==='application/vnd.google-apps.'+kind)?{fingerprint_representation:'application/pdf',source_mime_type:r.metadata.sourceMimeType}:{};
 const cleanReceipt = r => ({ id: r.id, receipt_number: r.receipt_number, manifest_hash: r.manifest_hash, status: r.status,
   access_policy: r.access_policy, generated_at: r.generated_at, anchor_status: r.anchor_status });
 const cleanFolder = f => ({ id: f.id, title: f.title, context: f.context, permission_level: f.permission_level,
@@ -78,12 +79,12 @@ export function registerAccountTools(server, provider, auth) {
         next_offset: offset + limit < folders.length ? offset + limit : null };
     });
   register('get_folder', 'Read a Countervault folder',
-    'Read current versions in a selected account folder; use get_record_history for superseded versions, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Preserve storage_mode and content_stored when returned; a fingerprint does not imply a saved copy. Uploads, explicit file-version replacement and downloads happen in the Countervault website; do not copy or upload linked content through an assistant. Does not download original files or expose participant emails or sharing tokens.',
+    'Read current versions in a selected account folder; use get_record_history for superseded versions, its note text/entry metadata and receipt summaries under existing access permissions. Use a folder ID returned by list_folders or create_folder. Preserve tier and content_origin: user_authored records are user statements, not independently established facts. Preserve storage_mode and content_stored when returned; a fingerprint does not imply a saved copy. For native Google documents, preserve fingerprint_representation and source_mime_type: the hash describes a PDF export, not native document bytes. Uploads, explicit file-version replacement and downloads happen in the Countervault website; do not copy or upload linked content through an assistant. Does not download original files or expose participant emails or sharing tokens.',
     { folder_id: uuid, offset: z.number().int().min(0).max(10000).default(0), limit: z.number().int().min(1).max(50).default(20) }, false,
     async ({ folder_id, offset, limit }, call) => {
       const result = await call('/api/folders/' + folder_id);
       const records=result.records.filter(record=>record.is_current!==false);
-      return { folder: cleanFolder(result.folder), records: records.slice(offset, offset + limit).map(r => ({ id: r.id, ...recordOrigin(r), ...versionFields(r), ...storageFields(r),
+      return { folder: cleanFolder(result.folder), records: records.slice(offset, offset + limit).map(r => ({ id: r.id, ...recordOrigin(r), ...versionFields(r), ...storageFields(r), ...fingerprintFields(r),
         title: r.metadata?.title || r.original_filename, sha256: r.sha256, byte_size: r.byte_size, source_type: r.source_type,
         claimed_at: r.captured_at, attested_at: r.attested_at, saved_at: r.created_at,
         ...(r.source_type === 'typed_note' ? { note_text: String(r.metadata?.text || '').slice(0, 20000), note_truncated: Boolean(r.note_truncated) || String(r.metadata?.text || '').length > 20000 } : {}) })),
@@ -94,7 +95,7 @@ export function registerAccountTools(server, provider, auth) {
     'Read saved versions of a selected entry under the same folder permissions. Earlier notes and receipts are preserved. Preserve source labels; a correction does not establish truth. Returns private note text, truncated explicitly when necessary; does not download original files.',
     {folder_id:uuid,record_id:uuid,before_version:z.number().int().min(1).max(2147483647).optional()},false,async({folder_id,record_id,before_version},call)=>{
       const result=await call(`/api/folders/${folder_id}/records/${record_id}/history${before_version?'/'+before_version:''}`);
-      return {item_id:result.item_id,current_version_id:result.current_version_id,total_versions:result.total_versions,next_before_version:result.next_before_version,versions:result.versions.map(r=>({id:r.id,...recordOrigin(r),...versionFields(r), ...storageFields(r),title:r.metadata?.title||r.original_filename,sha256:r.sha256,source_type:r.source_type,reason:r.reason,saved_at:r.created_at,can_correct:r.can_correct,
+      return {item_id:result.item_id,current_version_id:result.current_version_id,total_versions:result.total_versions,next_before_version:result.next_before_version,versions:result.versions.map(r=>({id:r.id,...recordOrigin(r),...versionFields(r), ...storageFields(r), ...fingerprintFields(r),title:r.metadata?.title||r.original_filename,sha256:r.sha256,source_type:r.source_type,reason:r.reason,saved_at:r.created_at,can_correct:r.can_correct,
         ...(r.source_type==='typed_note'?{note_text:String(r.metadata?.text||'').slice(0,20000),note_truncated:Boolean(r.note_truncated)||String(r.metadata?.text||'').length>20000}:{})}))};
     });
   register('create_folder', 'Create a private Countervault folder',
