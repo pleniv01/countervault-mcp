@@ -37,6 +37,7 @@ export function createServer({ provider, auth } = {}) {
 }
 
 export function createApp({ provider } = {}) {
+  if(process.env.COUNTERVAULT_RESTORE_QUARANTINE==='true')throw new Error('Restore quarantine is enabled. MCP access must stay stopped until replay and verification complete.');
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('X-Content-Type-Options', 'nosniff'); next(); });
@@ -88,6 +89,7 @@ export function createApp({ provider } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if(process.env.COUNTERVAULT_RESTORE_QUARANTINE==='true')throw new Error('Restore quarantine is enabled. MCP and cleanup jobs must stay stopped.');
   let provider;
   if (process.env.OAUTH_ENABLED === 'true') {
     const store = await createOAuthStore();
