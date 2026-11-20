@@ -42,3 +42,13 @@ The paired website adds reviewed local-file replacements under an explicitly sel
 ### Transactional broker audit review
 
 The audit integration requires the paired Countervault API schema through migration 0030. Browser approval/denial/revocation rechecks the presented person session in the write transaction; protocol token processing and cleanup use fixed server attribution. Audit failure rolls back the associated mutation. No tokens, scopes, redirects or client metadata are copied into audit headers. This is a coordinated review change, not an independently deployable update. Public tools and connection notice remain 0.6.0; Countervault's MCP apps do not run model providers. Unbound registration/request metadata and operation-cache outcomes still need separate coverage.
+
+### Coordinated item deletion review
+
+The deletion-aware operation cache requires paired API migration 0034. Quiesce old broker replicas at the coordinated release; do not run the former cache writer beside the new deletion endpoint. Operation creation and completion briefly lock the account, capture its deletion epoch and release all locks before an API/network call. Deletion clears result bodies and content commitments, retaining only hashed erased retry keys. An old completion cannot restore or return its cached result, and replaying an erased request never performs the write again.
+
+Both Claude and ChatGPT retain the existing 0.6.0 tools/scopes/notice. There is no assistant deletion tool: the owner reviews deletion in Countervault. If a saved action result was erased, direct the user to review Countervault; never mint a new request ID to recreate it automatically. Previously returned conversation/export copies remain outside server erasure. This is review code, not a deployment or completion of the wider deletion package.
+
+### Restore quarantine
+
+Set `COUNTERVAULT_RESTORE_QUARANTINE=true` before a database restore and keep the API, MCP service and all workers stopped until the app's authenticated offline erasure replay and verification complete. MCP startup refuses quarantine before OAuth schema initialization, request cleanup or HTTP listening. In quarantine, `npm run restore:prepare` initializes only the broker schema on the explicitly configured restore database; it starts no listener or maintenance loop. Existing `DATABASE_URL` and `OAUTH_TOKEN_ENCRYPTION_KEY` secrets are required. Follow the app repository's `docs/architecture/BACKUP_RECOVERY.md`. Reconnect assistants after recovery; restored sessions and cached results are invalidated. No public tool, scope or connection notice changes.

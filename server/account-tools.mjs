@@ -1,3 +1,4 @@
+import {beginOperation,completeOperation,discardOperation} from './operation-cache.mjs';
 import { recordOrigin } from './record-origin.mjs';
 import { z } from 'zod';
 import { hashToken } from './oauth-store.mjs';
@@ -14,22 +15,16 @@ const cleanFolder = f => ({ id: f.id, title: f.title, context: f.context, permis
 export async function runOnce(provider, auth, id, operation, payload, run) {
   const { store } = provider;
   const payloadHash = hashToken(JSON.stringify(payload));
-  const inserted = await store.q(`INSERT INTO ${store.schema}.operations(grant_id,request_id,operation,payload_hash) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING request_id`,
-    [auth.extra.grantId, id, operation, payloadHash]);
-  if (!inserted.rowCount) {
-    const previous = (await store.q(`SELECT * FROM ${store.schema}.operations WHERE grant_id=$1 AND request_id=$2`, [auth.extra.grantId, id])).rows[0];
-    if (previous.operation !== operation || previous.payload_hash !== payloadHash) throw new Error('This request ID belongs to different content. Review the intended action before starting a new operation.');
-    if (previous.status === 'complete') return { ...previous.result, repeated_request: true };
-    throw new Error('This operation is in progress or its outcome is uncertain. Inspect the folder in Countervault before creating a new request. No automatic retry was performed.');
-  }
+  const previous=await beginOperation(store,auth.extra.grantId,id,operation,payloadHash);
+  if(previous)return {...previous,repeated_request:true};
   try {
     const result = await run();
-    await store.q(`UPDATE ${store.schema}.operations SET status='complete',result=$3 WHERE grant_id=$1 AND request_id=$2`, [auth.extra.grantId, id, result]);
+    if(!await completeOperation(store,auth.extra.grantId,id,result))throw Object.assign(new Error('Saved content changed or was deleted while this action was completing. Review Countervault; do not repeat this action with a new request ID.'),{operationCompleted:true});
     return result;
   } catch (error) {
     // HTTP errors known to precede a write (auth, permission, validation, billing)
     // may be retried with the same operation ID after the cause is addressed.
-    if ([400, 401, 402, 403, 404, 413, 429].includes(error.status)) await store.q(`DELETE FROM ${store.schema}.operations WHERE grant_id=$1 AND request_id=$2`, [auth.extra.grantId, id]);
+    if ([400, 401, 402, 403, 404, 413, 429].includes(error.status)) await discardOperation(store,auth.extra.grantId,id);
     throw error;
   }
 }

@@ -54,6 +54,8 @@ export async function createOAuthStore({ connectionString = process.env.DATABASE
   const supported=(await pool.query("SELECT 1 FROM pg_constraint WHERE conrelid=$1::regclass AND pg_get_constraintdef(oid) LIKE '%session_started%'",[accountSchema+'.audit_chain_events'])).rowCount;
   if(!supported)throw new Error('Apply paired Countervault audit migrations through 0030 before starting this broker.');
   await pool.query(`ALTER TABLE ${schema}.requests ADD COLUMN IF NOT EXISTS audit_id uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE`);
+  try{await pool.query(`SELECT deletion_epoch FROM ${accountSchema}.accounts LIMIT 0`);}catch(error){if(error.code==='42703')throw new Error('Apply paired Countervault item erasure migration 0034 before starting this broker.');throw error;}
+  await pool.query(`ALTER TABLE ${schema}.operations ADD COLUMN IF NOT EXISTS result_epoch bigint NOT NULL DEFAULT 0`);
   const audit=brokerAudit(pool,schema,accountSchema);
   const q = (text, values = []) => pool.query(text, values);
   async function transaction(run) {

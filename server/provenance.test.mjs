@@ -16,7 +16,7 @@ test('Claude and ChatGPT transports preserve record origin and refuse to save ho
   const folderId='11111111-1111-4111-8111-111111111111',recordId='22222222-2222-4222-8222-222222222222';
   let writes=0,operations=0;
   const provider={issuer:'https://countervault-mcp-production.up.railway.app/',resource:'https://countervault-mcp-production.up.railway.app/mcp',clientsStore:{getClient(){}},
-    store:{schema:'synthetic',async q(){operations++;return {rowCount:1,rows:[]};}},
+    store:{schema:'synthetic',accountSchema:'fixture_accounts',async lockGrantAccount(){return {account_id:'fixture'};},async transaction(run){return run({query:async sql=>{operations++;return {rowCount:1,rows:sql.includes('deletion_epoch')?[{epoch:'0'}]:sql.includes('SELECT status')?[{status:'started',epoch:'0'}]:[]};}});},async q(){operations++;return {rowCount:1,rows:[]};}},
     async verifyAccessToken(token){if(!['claude_fixture','chatgpt_fixture'].includes(token))throw Error('invalid');return {token,scopes:['countervault:read','countervault:write'],clientId:token,resource:new URL(this.resource),extra:{grantId:token}};},
     async backendSession(){return 'synthetic_session';},
     async requestAccount(_session,path,options={}){
