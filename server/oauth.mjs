@@ -7,7 +7,7 @@ import {bindBrowserIdentity} from './broker-audit.mjs';
 import { hashToken } from './oauth-store.mjs';
 import { accountRequest } from './account-api.mjs';
 
-export const SCOPES = ['countervault:read', 'countervault:write'];
+export const SCOPES = ['countervault:read', 'countervault:write', 'countervault:insights'];
 const callbackHosts = new Set(['chatgpt.com', 'platform.openai.com', 'claude.ai', 'console.anthropic.com']);
 export function validRedirect(value, allowLoopback = false) {
   try {

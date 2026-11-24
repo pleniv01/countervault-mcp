@@ -45,7 +45,7 @@ test('Private MCP tools require account consent and write scope, even when publi
   const reader = new Client({ name: 'reader-test', version: '1' });
   try {
     await anonymous.connect(new StreamableHTTPClientTransport(url));
-    assert.equal((await anonymous.listTools()).tools.length, 9);
+    assert.equal((await anonymous.listTools()).tools.length, 12);
     const challenge = await anonymous.callTool({ name: 'list_folders', arguments: {} });
     assert.equal(challenge.isError, true);
     assert.ok(challenge._meta['mcp/www_authenticate'][0].includes('countervault:read'));
@@ -56,6 +56,13 @@ test('Private MCP tools require account consent and write scope, even when publi
     const denied = await reader.callTool({ name: 'create_folder', arguments: { title: 'Fixture', request_id: 'fixture_123' } });
     assert.equal(denied.isError, true);
     assert.equal(accountCalls, 1);
+    for (const name of ['get_insights','get_report','insights_status']) {
+      const args = name === 'get_report' ? {report_id:'11111111-1111-4111-8111-111111111111'} : {};
+      const blocked = await reader.callTool({name, arguments:args});
+      assert.equal(blocked.isError,true);
+      assert.ok(blocked._meta['mcp/www_authenticate'][0].includes('countervault:insights'));
+    }
+    assert.equal(accountCalls,1, 'old record permission must not call Insights backend');
     const invalid = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer invalid' } });
     assert.equal(invalid.status, 401);
     assert.ok(invalid.headers.get('www-authenticate').includes('resource_metadata'));

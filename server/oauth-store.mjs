@@ -126,14 +126,14 @@ export async function createOAuthStore({ connectionString = process.env.DATABASE
         if(identity.principal?.kind!=='person'||identity.auth_mode!=='passwordless')throw new Error('Approve this connection while signed in directly to Countervault.');
         const id=randomUUID(),session=randomToken('session'),expires=new Date(Date.now()+GRANT_TTL);
         const scopes=request.params.scopes;
-        if(!Array.isArray(scopes)||!scopes.includes('countervault:read')||scopes.some(scope=>!['countervault:read','countervault:write'].includes(scope)))throw new Error('Invalid connection scopes.');
-        const actions=['read_account','read',...(scopes.includes('countervault:write')?['create_folder','write_user_note','correct_user_note','create_receipt']:[])];
+        if(!Array.isArray(scopes)||!scopes.includes('countervault:read')||scopes.some(scope=>!['countervault:read','countervault:write','countervault:insights'].includes(scope)))throw new Error('Invalid connection scopes.');
+        const actions=['read_account','read',...(scopes.includes('countervault:insights')?['read_insights']:[]),...(scopes.includes('countervault:write')?['create_folder','write_user_note','correct_user_note','create_receipt']:[])];
         const host=new URL(request.params.redirectUri).hostname;
         const surface=['chatgpt.com','platform.openai.com'].includes(host)?'chatgpt':['claude.ai','console.anthropic.com'].includes(host)?'claude':'api';
         const consent=(await db.query(`INSERT INTO ${accountSchema}.consent_events(account_id,user_id,kind,doc_version,subject_id,accepted,surface)
           VALUES($1,$2,'connect_agent',$3,$4,true,'web') RETURNING id`,[identity.account.id,identity.user.id,CONNECTION_NOTICE_VERSION,id])).rows[0];
         await db.query(`INSERT INTO ${accountSchema}.authorization_grants(id,account_id,owner_user_id,grantee_type,grantee_id,all_projects,tiers,actions,exclude_restricted,consent_event_id,enabled,expires_at)
-          VALUES($1,$2,$3,'assistant',$1,true,ARRAY['record','agent_interpretation'],$4,true,$5,true,$6)`,[id,identity.account.id,identity.user.id,actions,consent.id,expires]);
+          VALUES($1,$2,$3,'assistant',$1,true,$7,$4,true,$5,true,$6)`,[id,identity.account.id,identity.user.id,actions,consent.id,expires,scopes.includes('countervault:insights')?['record','agent_interpretation']:['record']]);
         const backend=(await db.query(`INSERT INTO ${accountSchema}.auth_sessions(user_id,account_id,token_hash,expires_at,last_seen_at,actor_kind,actor_surface,principal_id,authorization_grant_id)
           VALUES($1,$2,$3,$4,now(),'assistant',$5,$6,$6) RETURNING id`,[identity.user.id,identity.account.id,hashToken(session),expires,surface,id])).rows[0];
         await db.query(`INSERT INTO ${schema}.grants(id,client_id,user_id,account_id,backend_session_id,encrypted_session,scopes,resource,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
