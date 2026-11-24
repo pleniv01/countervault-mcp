@@ -1,5 +1,7 @@
 # Countervault account and verification MCP service
 
+Operated by [Post Hoc Labs](https://posthoc.me), a registered Maine DBA. Product names and support addresses remain unchanged.
+
 Account-connected record workflows and public receipt verification for Countervault. The installable Claude
 plugin is maintained separately at https://github.com/pleniv01/countervault-claude-plugin.
 The ChatGPT candidate is in the owner's `codex-business-plugins` collection.

@@ -1,5 +1,7 @@
 # Countervault assistant integration privacy
 
+Operated by [Post Hoc Labs](https://posthoc.me), a registered Maine DBA. Product names and support addresses remain unchanged.
+
 Effective November 11, 2026. This notice covers the Countervault MCP service and its Claude and ChatGPT plugins. It supplements the [Countervault website policy](https://api.countervault.co/privacy).
 
 ## Public receipt checks
