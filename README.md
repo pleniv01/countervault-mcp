@@ -54,3 +54,8 @@ Both Claude and ChatGPT retain the existing 0.6.0 tools/scopes/notice. There is 
 ### Restore quarantine
 
 Set `COUNTERVAULT_RESTORE_QUARANTINE=true` before a database restore and keep the API, MCP service and all workers stopped until the app's authenticated offline erasure replay and verification complete. MCP startup refuses quarantine before OAuth schema initialization, request cleanup or HTTP listening. In quarantine, `npm run restore:prepare` initializes only the broker schema on the explicitly configured restore database; it starts no listener or maintenance loop. Existing `DATABASE_URL` and `OAUTH_TOKEN_ENCRYPTION_KEY` secrets are required. Follow the app repository's `docs/architecture/BACKUP_RECOVERY.md`. Reconnect assistants after recovery; restored sessions and cached results are invalidated. No public tool, scope or connection notice changes.
+
+
+### Quick Start (0.8.0)
+
+`start_quick_scan` returns a link only; no source is read. `get_scan_suggestions` requires separate optional `countervault:quickstart` consent and reads pending cluster titles, reasons, counts and deep links. No bodies, source connection, consent or assignment authority is added. The paired API must apply migration 0049 before this broker is deployed. Old grants are not expanded. The connection notice is `mcp-access-2026-11-26`; publication of host packages is separate.

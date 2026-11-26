@@ -126,8 +126,8 @@ export async function createOAuthStore({ connectionString = process.env.DATABASE
         if(identity.principal?.kind!=='person'||identity.auth_mode!=='passwordless')throw new Error('Approve this connection while signed in directly to Countervault.');
         const id=randomUUID(),session=randomToken('session'),expires=new Date(Date.now()+GRANT_TTL);
         const scopes=request.params.scopes;
-        if(!Array.isArray(scopes)||!scopes.includes('countervault:read')||scopes.some(scope=>!['countervault:read','countervault:write','countervault:insights'].includes(scope)))throw new Error('Invalid connection scopes.');
-        const actions=['read_account','read',...(scopes.includes('countervault:insights')?['read_insights']:[]),...(scopes.includes('countervault:write')?['create_folder','write_user_note','correct_user_note','create_receipt']:[])];
+        if(!Array.isArray(scopes)||!scopes.includes('countervault:read')||scopes.some(scope=>!['countervault:read','countervault:write','countervault:insights','countervault:quickstart'].includes(scope)))throw new Error('Invalid connection scopes.');
+        const actions=['read_account','read',...(scopes.includes('countervault:insights')?['read_insights']:[]),...(scopes.includes('countervault:quickstart')?['read_quickstart']:[]),...(scopes.includes('countervault:write')?['create_folder','write_user_note','correct_user_note','create_receipt']:[])];
         const host=new URL(request.params.redirectUri).hostname;
         const surface=['chatgpt.com','platform.openai.com'].includes(host)?'chatgpt':['claude.ai','console.anthropic.com'].includes(host)?'claude':'api';
         const consent=(await db.query(`INSERT INTO ${accountSchema}.consent_events(account_id,user_id,kind,doc_version,subject_id,accepted,surface)

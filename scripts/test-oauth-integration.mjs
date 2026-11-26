@@ -116,6 +116,11 @@ try {
   const readonlyTokens = await (await exchange({ grant_type: 'authorization_code', code: readonly.code, code_verifier: readonly.verifier, redirect_uri: redirect })).json();
   assert.equal((await exchange({ grant_type: 'refresh_token', refresh_token: readonlyTokens.refresh_token, scope: 'countervault:read countervault:write' })).status, 400);
   const readonlyAuth = await provider.verifyAccessToken(readonlyTokens.access_token);
+  const quick=await begin('countervault:read countervault:quickstart');
+  const quickTokens=await(await exchange({grant_type:'authorization_code',code:quick.code,code_verifier:quick.verifier,redirect_uri:redirect})).json();
+  const quickAuth=await provider.verifyAccessToken(quickTokens.access_token),quickBackend=await provider.backendSession(quickAuth);
+  const quickSession=(await pool.query(`SELECT * FROM ${accountSchema}.auth_sessions WHERE token_hash=$1`,[hashToken(quickBackend)])).rows[0];
+  const quickActor=await resolveSessionActor(quickSession,pool);assert.ok(quickActor.grant.actions.includes('read_quickstart'));assert.ok(!quickActor.grant.actions.includes('read_insights'));assert.ok(!actor.grant.actions.includes('read_quickstart'));
   await runBrokerAuditChecks({pool,store,provider,identity,client,apiDir,verifyStoredAuditChain});
   await pool.query(`UPDATE ${accountSchema}.account_memberships SET status='revoked' WHERE account_id=$1`, [identity.account.id]);
   await assert.rejects(provider.verifyAccessToken(readonlyTokens.access_token));
