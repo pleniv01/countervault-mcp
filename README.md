@@ -64,3 +64,6 @@ Set `COUNTERVAULT_RESTORE_QUARANTINE=true` before a database restore and keep th
 ### Background request status (0.8.1)
 
 `get_scan_suggestions` also returns authorized working-request summaries and review links through the existing optional Quick Start scope. Status is not a finding or a receipt. Launch, cancellation and completion-email preferences stay in Countervault. Several independent cloud scans can continue after leaving the website; browser-local reads need the tab. No new tool, scope, background-model authority or host write permission.
+
+
+Quick Start uses a small calibration sample before further Gmail collection. Its web UI asks whether results are on the right track. Continuing, providing search corrections or relevant/irrelevant examples, and creating the proposed folder happen only in Countervault. The server can use the confirmed correction to revise AI search planning and relevance checks; this assistant cannot approve another sample or imply a scan ran through MCP. Low-relevance suggestions are omitted by the shared server read path. A missing result is not proof of absence. Offer the returned private review link and preserve the distinction between temporary suggestions and saved receipts.
