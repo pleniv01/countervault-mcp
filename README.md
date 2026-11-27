@@ -59,3 +59,8 @@ Set `COUNTERVAULT_RESTORE_QUARANTINE=true` before a database restore and keep th
 ### Quick Start (0.8.0)
 
 `start_quick_scan` returns a link only; no source is read. `get_scan_suggestions` requires separate optional `countervault:quickstart` consent and reads pending cluster titles, reasons, counts and deep links. No bodies, source connection, consent or assignment authority is added. The paired API must apply migration 0049 before this broker is deployed. Old grants are not expanded. The connection notice is `mcp-access-2026-11-26`; publication of host packages is separate.
+
+
+### Background request status (0.8.1)
+
+`get_scan_suggestions` also returns authorized working-request summaries and review links through the existing optional Quick Start scope. Status is not a finding or a receipt. Launch, cancellation and completion-email preferences stay in Countervault. Several independent cloud scans can continue after leaving the website; browser-local reads need the tab. No new tool, scope, background-model authority or host write permission.
